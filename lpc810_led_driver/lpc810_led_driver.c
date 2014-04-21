@@ -55,20 +55,23 @@
 #define SYS_CORE_CLOCK 12000000UL
 #define SYS_TICK_PERIOD_IN_MS 50
 
+/* initial startup delay */
+volatile uint8_t startup_delay;
+
 /* inputs */
 
-uint8_t signal_fg_tick_timer = 0;			/* will count to 0. Foreground signal is active as long as != 0 */
-uint8_t signal_fg_permanent_color = 1;		/* defines, which color should be turned on permanently: bit 0: green, bit 1: red */
-uint8_t signal_fg_blink_color = 2;			/* defines, which color should blink: bit 0: green, bit 1: red */
+volatile uint8_t signal_fg_tick_timer = 0;			/* will count to 0. Foreground signal is active as long as != 0 */
+volatile uint8_t signal_fg_permanent_color = 1;		/* defines, which color should be turned on permanently: bit 0: green, bit 1: red */
+volatile uint8_t signal_fg_blink_color = 2;			/* defines, which color should blink: bit 0: green, bit 1: red */
 
-uint8_t signal_blink_ticks = 2;	/* 0: always on, else: blink */
-uint8_t signal_color = 2;		/* bit 0: green, bit 1: red */
+volatile uint8_t signal_blink_ticks = 2;	/* 0: always on, else: blink */
+volatile uint8_t signal_color = 2;		/* bit 0: green, bit 1: red */
 
 /* internal */
-uint8_t signal_state = 0;
-uint8_t signal_cnt = 0;
+volatile uint8_t signal_state = 0;
+volatile uint8_t signal_cnt = 0;
 
-uint8_t signal_fg_blink_status = 0;
+volatile uint8_t signal_fg_blink_status = 0;
 
 /*
   set a value
@@ -229,6 +232,7 @@ void battery_condition_task(void)
   battery_user_value = 5- battery_user_value;
   
   signal_set_fg_value(battery_user_value, 40);
+  signal_set_fg_value(0, 40);
   
 }
 
@@ -253,6 +257,7 @@ void battery_condition_task(void)
   TIMER_MAX	 	Freq.
   120			100KHz
   60				200KHz
+  30				400KHz
   12				1MHz
 
 */
@@ -342,7 +347,7 @@ void __attribute__ ((noinline)) pwm_init(void)
     = 2			/* match register */
     | (0 << 6)		/* i/o select */
     | (0 << 10) 		/* 11:10 IOCOND, 0=Low 1=Rise 2=Fall 3=High */
-    | (3 << 12) 		/* 13:12 COMBMODE, 0=OR 1=Match 2=I/O 3=AND */
+    // disable ACOMP | (3 << 12) 		/* 13:12 COMBMODE, 0=OR 1=Match 2=I/O 3=AND */
     | (0<<14) 		/* 14 STATELD, 0=Add 1=Load */
     | (0<<15);		/* 19:15 STATEV */
   /* apply event 1 to state 0 */
@@ -391,8 +396,6 @@ void __attribute__ ((noinline)) pwm_init(void)
   /* Enable input on ACMP_I1 */
   Chip_SWM_EnableFixedPin(SWM_FIXED_ACMP_I1);
   
-  pwm_start();
-
 }
 
 void key_init(void)
@@ -482,24 +485,46 @@ volatile uint32_t sys_tick_irq_cnt=0;
 void __attribute__ ((interrupt)) SysTick_Handler(void)
 {
   sys_tick_irq_cnt++;
-  
-  if ( LPC_CMP->CTRL & ACMP_COMPSTAT_BIT )
-    signal_color = 1;
+
+  if ( startup_delay > 0 )
+  {
+    startup_delay--;
+    /* do nothing during the startup delay */
+  }
   else
-    signal_color = 2;
-  
-  battery_condition_task();
-  key_task();
-  signal_task();
-  
+  {
+    /* normal operation */
+    
+    if ( LPC_CMP->CTRL & ACMP_COMPSTAT_BIT )
+      signal_color = 1;
+    else
+      signal_color = 2;
+    
+    
+    battery_condition_task();
+    key_task();
+    signal_task();
+  }
 }
 
 
 int __attribute__ ((noinline)) main(void)
 {
+
+  /* half second startup delay with 50ms sys tick */
+  startup_delay = 10;		
+  
+  /* set systick and start systick interrupt */
+  SysTick_Config(SYS_CORE_CLOCK/1000UL*(unsigned long)SYS_TICK_PERIOD_IN_MS);
   
   /* turn on GPIO */
   Chip_GPIO_Init(LPC_GPIO_PORT);
+  
+  /* setup direction of the two LEDs */
+  signal_init();
+  
+  /* light both LEDs during the startup */
+  signal_set_leds(3);
   
   /* turn on IOCON */
   Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_IOCON);
@@ -514,19 +539,25 @@ int __attribute__ ((noinline)) main(void)
   Chip_SWM_DisableFixedPin(2);
   Chip_SWM_DisableFixedPin(3);
 
-  signal_init();
-  
+  /* setup user key handling */
   key_init();
-  
+
+  /* wait until (nearly) end of start up delay */
+  while( startup_delay > 2 )
+    ;
+
+  /* setup charge pump */
   pwm_init();
+
+  pwm_start();
+
 
   /* after setting up the switch matrix, it can be turned off (will save 0.03mA) */
   //Chip_SWM_Deinit();
   
   
   
-  /* set systick and start systick interrupt */
-  SysTick_Config(SYS_CORE_CLOCK/1000UL*(unsigned long)SYS_TICK_PERIOD_IN_MS);
+  
   
   /* enter sleep mode: Reduce from 1.4mA to 0.8mA with 12MHz */  
   while (1)
