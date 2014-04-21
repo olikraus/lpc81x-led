@@ -232,7 +232,6 @@ void battery_condition_task(void)
   battery_user_value = 5- battery_user_value;
   
   signal_set_fg_value(battery_user_value, 40);
-  signal_set_fg_value(0, 40);
   
 }
 
@@ -276,18 +275,48 @@ void pwm_stop(void)
 }
 
 /*
+  Instead of using 
+    void Chip_ACMP_SetupVoltLadder(LPC_CMP_T *pACMP, uint32_t ladsel, bool ladrefVDDCMP)
+  here is my own setup procedure. IMHO ladset is misleading as it requires that the arguments must be
+  multiplied by 2.
+
+  Instead, here is a special procedure for this project. 
+  - select input voltage as source
+  - set the ladder value (0..31)
+
+*/
+void analog_comperator_setup_ladder(uint32_t ladsel)
+{
+  LPC_CMP->LAD 
+    = 1 << 0		/* enable ladder */
+    | ladsel << 1 	/* apply ladder value */
+    | 0 << 6		/* use power supply as reference voltage */
+    ;
+}
+
+
+
+
+/*
   (re)start PWM
 */
 void pwm_start(void)
 {
   /* setup voltage ladder, use power supply pin (last arg = 0) 
     with 11 Ohm, bad battery condition (5V):
-    4 = 0.56V 
-    8 = 0.61V
-    12 = 0.66V
-    16 = 0.77V
+  
+    1K + 10K
+  
+    5 = ???
+    6 = 0.859V
+    8 = 1.03V
+    10 = 1.21V
+    15 = 1.67V
+    20 = 2.17V
+    25 = 2.66V
+      
   */
-  Chip_ACMP_SetupVoltLadder(LPC_CMP, 2, 0);
+  analog_comperator_setup_ladder(6);
 
   /* start */
   LPC_SCT->CTRL_U &= ~SCT_CTRL_HALT_L;
@@ -347,7 +376,7 @@ void __attribute__ ((noinline)) pwm_init(void)
     = 2			/* match register */
     | (0 << 6)		/* i/o select */
     | (0 << 10) 		/* 11:10 IOCOND, 0=Low 1=Rise 2=Fall 3=High */
-    // disable ACOMP | (3 << 12) 		/* 13:12 COMBMODE, 0=OR 1=Match 2=I/O 3=AND */
+    | (3 << 12) 		/* 13:12 COMBMODE, 0=OR 1=Match 2=I/O 3=AND */
     | (0<<14) 		/* 14 STATELD, 0=Add 1=Load */
     | (0<<15);		/* 19:15 STATEV */
   /* apply event 1 to state 0 */
@@ -379,10 +408,10 @@ void __attribute__ ((noinline)) pwm_init(void)
   Chip_ACMP_SetHysteresis(LPC_CMP, ACMP_HYS_5MV);
   
   /* enable voltage ladder */
-  Chip_ACMP_EnableVoltLadder(LPC_CMP);
+  //Chip_ACMP_EnableVoltLadder(LPC_CMP);
 
-  /* set a default value, will be overwritten in pwm_start() */
-  Chip_ACMP_SetupVoltLadder(LPC_CMP, 2, 0);
+  /* enable ladder, set a default value to the ladder, will be overwritten in pwm_start() */
+  analog_comperator_setup_ladder(4);
 
   /* Enable sync with bus for the comparator output because it will be connected to CTIN_0 */
   Chip_ACMP_EnableSyncCompOut(LPC_CMP);
@@ -600,7 +629,7 @@ void __attribute__ ((interrupt)) __attribute__ ((noreturn)) Reset_Handler(void)
   __etext: End of code section, i.e., begin of data sections to copy from.
   __data_start__/__data_end__: RAM address range that data should be
   copied to. Both must be aligned to 4 bytes boundary.  
-*/
+  */
   extern unsigned long __data_start__[];
   extern unsigned long __data_end__[];
   extern unsigned long __etext[];
@@ -614,12 +643,12 @@ void __attribute__ ((interrupt)) __attribute__ ((noreturn)) Reset_Handler(void)
     ptr++;
   }
   
-/*
+  /*
   Loop to zero out BSS section, which uses following symbols
   in linker script:
   __bss_start__: start of BSS section. Must align to 4
   __bss_end__: end of BSS section. Must align to 4
-*/
+  */
   extern unsigned long __bss_start__[];
   extern unsigned long __bss_end__[];
   ptr = __bss_start__;
@@ -630,13 +659,10 @@ void __attribute__ ((interrupt)) __attribute__ ((noreturn)) Reset_Handler(void)
     ptr++;
   }
 
-/*
-  Call main procedure
-*/  
+  /* Call main procedure */  
   main();
-/*
-  finished, do nothing.
-*/
+  
+  /* finished, do nothing. */
   for(;;)
     ;
 }
