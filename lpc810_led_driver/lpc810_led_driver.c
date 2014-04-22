@@ -55,8 +55,14 @@
 #define SYS_CORE_CLOCK 12000000UL
 #define SYS_TICK_PERIOD_IN_MS 50
 
+
+/* forward declarations */
+void pwm_stop(void);
+
+
 /* initial startup delay */
 volatile uint8_t startup_delay;
+volatile uint8_t global_error_code = 0;	/* will be set to 0 only by reset */
 
 /* inputs */
 
@@ -64,13 +70,7 @@ volatile uint8_t signal_fg_tick_timer = 0;			/* will count to 0. Foreground sign
 volatile uint8_t signal_fg_permanent_color = 1;		/* defines, which color should be turned on permanently: bit 0: green, bit 1: red */
 volatile uint8_t signal_fg_blink_color = 2;			/* defines, which color should blink: bit 0: green, bit 1: red */
 
-volatile uint8_t signal_blink_ticks = 2;	/* 0: always on, else: blink */
-volatile uint8_t signal_color = 2;		/* bit 0: green, bit 1: red */
-
 /* internal */
-volatile uint8_t signal_state = 0;
-volatile uint8_t signal_cnt = 0;
-
 volatile uint8_t signal_fg_blink_status = 0;
 
 /*
@@ -153,40 +153,85 @@ void signal_fg_task(void)
     else
     {
       if ( signal_fg_blink_status == 0 )
+      {
 	signal_fg_blink_status = 3;
+      }
       else
+      {
 	signal_fg_blink_status = 0;
+      }
+      signal_set_leds((signal_fg_blink_color&signal_fg_blink_status)|signal_fg_permanent_color);
     }
-    signal_set_leds((signal_fg_blink_color&signal_fg_blink_status)|signal_fg_permanent_color);
+  }
+}
+
+/* input */
+uint8_t signal_bg_fast_blink_times = 3;
+uint8_t signal_bg_fast_blink_ticks = 2;
+uint8_t signal_bg_long_delay_ticks = 10;
+uint8_t signal_bg_color = 2;		/* bit 0: green, bit 1: red */
+
+/* internal */
+uint8_t signal_bg_tick_cnt = 0;
+uint8_t signal_bg_fast_blink_state = 0;
+
+void signal_bg_set_error_code(uint8_t error_value)
+{
+  signal_bg_fast_blink_times = error_value;
+  signal_bg_fast_blink_ticks = 2;
+  signal_bg_long_delay_ticks = 20;
+  signal_bg_color = 2;	/* red */
+  signal_bg_tick_cnt = 0;
+  signal_bg_fast_blink_state = 0;
+  signal_set_leds(0);  
+}
+
+void set_global_error(uint8_t error_code)
+{
+  if ( global_error_code == 0 )
+  {
+    global_error_code = error_code;
+    signal_bg_set_error_code(global_error_code);
+    pwm_stop();
   }
 }
 
 void signal_bg_task(void)
 {
-  if ( signal_blink_ticks == 0 )
+  if ( signal_bg_fast_blink_times != 0 )
   {
-    signal_set_leds(signal_color);
-  }
-  else
-  {
-    signal_cnt++;
-    if ( signal_cnt >= signal_blink_ticks )
+    if ( signal_bg_fast_blink_state < signal_bg_fast_blink_times*2 )
     {
-      signal_cnt = 0;
-      
-      if ( signal_state == 0 )
-	signal_state = 1;
-      else
-	signal_state = 0;
-
-      if ( signal_state == 0 )
+      if ( signal_bg_tick_cnt < signal_bg_fast_blink_ticks )
       {
-	signal_set_leds(0);
+	signal_bg_tick_cnt++;
       }
       else
       {
-	signal_set_leds(signal_color);
+	signal_bg_tick_cnt = 0;
+	signal_bg_fast_blink_state++;
+	if ( signal_bg_fast_blink_state & 1 )
+	{
+	  signal_set_leds(signal_bg_color);
+	}
+	else
+	{
+	  signal_set_leds(0);
+	}
       }
+    }
+    else
+    {
+      signal_set_leds(0);
+      if ( signal_bg_tick_cnt < signal_bg_long_delay_ticks )
+      {
+	signal_bg_tick_cnt++;
+      }
+      else
+      {
+	signal_bg_tick_cnt = 0;
+	signal_bg_fast_blink_state = 0;
+      }    
     }
   }
 }
@@ -199,15 +244,12 @@ void signal_task(void)
     signal_bg_task();
 }
 
-
-
-
-
 /*
   the battery condition task will read and reset the upper counter.
 */
 uint16_t battery_condition_raw_value = 0;
 uint8_t battery_user_value = 0;
+uint8_t battery_error_debounce = 0;
 
 void battery_condition_task(void)
 {
@@ -223,15 +265,27 @@ void battery_condition_task(void)
   LPC_SCT->CTRL_U &= ~SCT_CTRL_HALT_H;	
   LPC_SCT->CTRL_U &= ~SCT_CTRL_STOP_H;
   
+  if ( battery_condition_raw_value <= 4 )
+  {    
+    battery_error_debounce++;
+    if ( battery_error_debounce > 2 )
+      set_global_error(1); /* LED: open-circuit, Analog Comperator connected to GND only */
+  }
+  else
+  {
+    battery_error_debounce = 0;
+  }
+
   
 
   /* derive user value, here 0 means very bad battery condition */
   battery_user_value = (((uint32_t)battery_condition_raw_value-0)*6UL) / 50000UL;
+  
   if ( battery_user_value >= 5 )
     battery_user_value = 5;
   battery_user_value = 5- battery_user_value;
   
-  signal_set_fg_value(battery_user_value, 40);
+  //signal_set_fg_value(battery_user_value, 40);
   
 }
 
@@ -268,10 +322,14 @@ void battery_condition_task(void)
 */
 void pwm_stop(void)
 {
+  LPC_SCT->OUT[0].CLR = 0;
+  LPC_SCT->OUT[0].SET = 0;
+
   /* stop and halt both timers */
   LPC_SCT->CTRL_U |= SCT_CTRL_HALT_L|SCT_CTRL_HALT_H|SCT_CTRL_STOP_L|SCT_CTRL_STOP_H;
   
-  
+  Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 1);	/* port 0, pin 1: MOSFET Gate */
+  Chip_GPIO_SetPinOutLow(LPC_GPIO_PORT, 0, 1);    		/* Set MOSFET Gate to 0 Volt, this will disallow current to flow though the MOSFET */
 }
 
 /*
@@ -309,6 +367,7 @@ void pwm_start(void)
   
     5 = ???
     6 = 0.859V
+    7 = 0.868V		--> with 1.3 Ohm this should be 670 mA
     8 = 1.03V
     10 = 1.21V
     15 = 1.67V
@@ -317,6 +376,12 @@ void pwm_start(void)
       
   */
   analog_comperator_setup_ladder(6);
+
+  /* event 1 will set CTOUT_0 to high */
+  LPC_SCT->OUT[0].SET |= 1<<1;
+  
+  /* event 0 will set CTOUT_0 to low */
+  LPC_SCT->OUT[0].CLR |= 1<<0;
 
   /* start */
   LPC_SCT->CTRL_U &= ~SCT_CTRL_HALT_L;
@@ -389,9 +454,9 @@ void __attribute__ ((noinline)) pwm_init(void)
   LPC_SCT->OUT[0].SET = 0;
 
   /* event 1 will set CTOUT_0 to high */
-  LPC_SCT->OUT[0].SET |= 1<<1;
+  /* LPC_SCT->OUT[0].SET |= 1<<1; */  	/* done in pwm_start() */
   
-  /* event 0 will set CTOUT_0 to low */
+  /* event 0 will set CTOUT_0 to low */	/* done in pwm_start() */
   LPC_SCT->OUT[0].CLR |= 1<<0;
 
   /* assign SCT output CTOUT_0 to gpio port 0, pin 1 */
@@ -448,13 +513,7 @@ uint8_t key_tick_cnt = 0;
 
 void key_short_press_event(void)
 {
-  /*
-  if ( signal_blink_ticks == 0 )
-    signal_blink_ticks = 2;
-  else
-    signal_blink_ticks = 0;
-  */
-  signal_set_fg_value(battery_user_value, 40);
+  signal_set_fg_value(battery_user_value, 30);
 }
 
 void key_long_press_event(void)
@@ -522,16 +581,12 @@ void __attribute__ ((interrupt)) SysTick_Handler(void)
   }
   else
   {
-    /* normal operation */
+    /* normal operation */    
+    if ( global_error_code == 0 )
+      battery_condition_task();
+    if ( global_error_code == 0 )
+      key_task();
     
-    if ( LPC_CMP->CTRL & ACMP_COMPSTAT_BIT )
-      signal_color = 1;
-    else
-      signal_color = 2;
-    
-    
-    battery_condition_task();
-    key_task();
     signal_task();
   }
 }
@@ -548,6 +603,10 @@ int __attribute__ ((noinline)) main(void)
   
   /* turn on GPIO */
   Chip_GPIO_Init(LPC_GPIO_PORT);
+
+  /* disable SWCLK and SWDIO, after reset this has been activated */
+  Chip_SWM_DisableFixedPin(2);
+  Chip_SWM_DisableFixedPin(3);
   
   /* setup direction of the two LEDs */
   signal_init();
@@ -564,16 +623,15 @@ int __attribute__ ((noinline)) main(void)
   /* activate analog comperator */
   Chip_ACMP_Init(LPC_CMP);
 
-  /* disable SWCLK and SWDIO, after reset this has been activated */
-  Chip_SWM_DisableFixedPin(2);
-  Chip_SWM_DisableFixedPin(3);
-
   /* setup user key handling */
   key_init();
 
   /* wait until (nearly) end of start up delay */
   while( startup_delay > 2 )
     ;
+  
+  /* set error code to global_error_code (=0 after reset). This will also turn off the LEDs if global_error_code = 0 */
+  signal_bg_set_error_code(global_error_code);
 
   /* setup charge pump */
   pwm_init();
