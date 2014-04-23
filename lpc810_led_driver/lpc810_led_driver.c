@@ -37,6 +37,26 @@
   Pin8: PIO0_0/ACMP_I1/CLKIN/TDI/U0_RXD		--> Step up converter: feedback input
   
   
+  LED codes:
+  1x short red flash, long blank		Error code 1: Open circuit, no LED connected, can always occur, reset or mode change required
+  2x short rad flash, long blank		Error code 2: Short circuit, input voltage too high, only checked during startup, reset required
+  permanently green				(A) Indicates startup delay, (B) indicates very good battery condition
+  blink red, permanently green		Indicates very good battery condition
+  permanently red and green			Indicates good battery condition
+  permanently red, blink green		Indicates average battery condition
+  permanently red					Indicates poor battery condition
+  blink red						Indicates very poor battery condition
+
+  User key:
+  Short press: 						Indicate Battery
+  Long press:						Switch light mode 100%, 50%, 25%, also recovers from Error code 1 (if possible)
+
+
+  Calculation of Ladder Value l (0..31)
+  R_shunt * I_led = 3.3V * l / 31
+  --> l = R_shunt * I_led * 31 / 3.3
+
+
   Inductance Calculation
   
   Uout: Expected output voltage
@@ -47,6 +67,12 @@
 
 */
 
+/* measure resitor in milli ohm */
+#define R_SHUNT	(1300)
+/* maximum forward current of the power LED in milli ampere*/
+#define I_MAX 		(700)
+
+
 
 
 #include <string.h>
@@ -56,6 +82,23 @@
 #define SYS_TICK_PERIOD_IN_MS 50
 
 
+#define LADDER_VAL3	((R_SHUNT*I_MAX*31L)/3300000L)
+
+#if LADDER_VAL3 >= 31
+#error "input voltage to high, use smaller shunt resistor"
+#endif
+
+#if LADDER_VAL3 <= 3
+#error "input voltage to small, use higher shunt resistor"
+#endif
+
+#define LADDER_VAL2 (LADDER_VAL3/2)
+
+#define LADDER_VAL1 (LADDER_VAL3/4)
+
+
+
+
 /* forward declarations */
 void pwm_stop(void);
 
@@ -63,6 +106,8 @@ void pwm_stop(void);
 /* initial startup delay */
 volatile uint8_t startup_delay;
 volatile uint8_t global_error_code = 0;	/* will be set to 0 only by reset */
+volatile uint8_t current_light_mode = 0;		/* lowest bightness */
+
 
 /* inputs */
 
@@ -266,7 +311,7 @@ void battery_condition_task(void)
   LPC_SCT->CTRL_U &= ~SCT_CTRL_STOP_H;
   
   if ( battery_condition_raw_value <= 4 )
-  {    
+  {
     battery_error_debounce++;
     if ( battery_error_debounce > 2 )
       set_global_error(1); /* LED: open-circuit, Analog Comperator connected to GND only */
@@ -346,13 +391,31 @@ void pwm_stop(void)
 void analog_comperator_setup_ladder(uint32_t ladsel)
 {
   LPC_CMP->LAD 
-    = 1 << 0		/* enable ladder */
-    | ladsel << 1 	/* apply ladder value */
-    | 0 << 6		/* use power supply as reference voltage */
+    = (1 << 0)		/* enable ladder */
+    | (ladsel << 1) 	/* apply ladder value */
+    | (0 << 6)		/* use power supply as reference voltage */
     ;
 }
 
-
+/*
+  set bightness from 0 (lowest) to 2 (highest)
+*/
+void set_light_mode(uint8_t mode)
+{
+  switch(mode)
+  {
+    default:
+    case 0:
+      analog_comperator_setup_ladder(LADDER_VAL1);
+      break;
+    case 1:
+      analog_comperator_setup_ladder(LADDER_VAL2);
+      break;
+    case 2:
+      analog_comperator_setup_ladder(LADDER_VAL3);
+      break;
+  }
+}
 
 
 /*
@@ -375,7 +438,7 @@ void pwm_start(void)
     25 = 2.66V
       
   */
-  analog_comperator_setup_ladder(6);
+  set_light_mode(current_light_mode);
 
   /* event 1 will set CTOUT_0 to high */
   LPC_SCT->OUT[0].SET |= 1<<1;
@@ -492,6 +555,44 @@ void __attribute__ ((noinline)) pwm_init(void)
   
 }
 
+/*
+  check voltage on the analog input pin
+  if it is too high, signal error code 2
+*/
+void check_short_circuit_fault(void)
+{
+  /* connect negative input of the comparator to ladder output */
+  Chip_ACMP_SetNegVoltRef(LPC_CMP, ACMP_NEGIN_VLO);
+  
+  /* connect positive input of the comparator to ACMP_I1 */
+  Chip_ACMP_SetPosVoltRef(LPC_CMP, ACMP_POSIN_ACMP_I1);
+
+  /* set hysteresis to 0mV */
+  Chip_ACMP_SetHysteresis(LPC_CMP, ACMP_HYS_NONE);
+
+    /* enable ladder, set a default value to the ladder, will be overwritten in pwm_start() */
+  analog_comperator_setup_ladder(30);
+
+  /* Enable input on ACMP_I1 */
+  Chip_SWM_EnableFixedPin(SWM_FIXED_ACMP_I1);
+  
+
+  /* wait for some cycles */
+  __NOP();
+  __NOP();
+  __NOP();
+  __NOP();
+  
+  /* check and assign error code */
+  
+  if ( LPC_CMP->CTRL & ACMP_COMPSTAT_BIT )
+    set_global_error(2);
+
+  /* Disable input on ACMP_I1 */
+  Chip_SWM_DisableFixedPin(SWM_FIXED_ACMP_I1);
+  
+}
+
 void key_init(void)
 {
   Chip_IOCON_PinSetMode(LPC_IOCON, IOCON_PIO4, PIN_MODE_PULLUP);
@@ -511,13 +612,31 @@ void key_init(void)
 uint8_t key_state = KEY_STATE_WAIT;
 uint8_t key_tick_cnt = 0;
 
+void key_raw_event(void)
+{
+  if ( global_error_code == 0 )
+    signal_set_fg_value(battery_user_value, 30);
+}
+
 void key_short_press_event(void)
 {
-  signal_set_fg_value(battery_user_value, 30);
 }
+
+
 
 void key_long_press_event(void)
 {
+  /* if there is global error 1, then try to restart this */
+  if ( global_error_code == 1 )
+  {
+    global_error_code = 0;
+    signal_bg_set_error_code(global_error_code);
+    pwm_start();
+  }
+  current_light_mode++;
+  if ( current_light_mode >= 3 )
+    current_light_mode = 0;
+  set_light_mode(current_light_mode);
 }
 
 void key_task(void)
@@ -531,6 +650,7 @@ void key_task(void)
       {
 	key_tick_cnt = 0;
 	key_state = KEY_STATE_DEBOUNCE;
+	key_raw_event();
       }
       break;
     case KEY_STATE_DEBOUNCE:
@@ -584,9 +704,8 @@ void __attribute__ ((interrupt)) SysTick_Handler(void)
     /* normal operation */    
     if ( global_error_code == 0 )
       battery_condition_task();
-    if ( global_error_code == 0 )
-      key_task();
     
+    key_task();    
     signal_task();
   }
 }
@@ -611,8 +730,8 @@ int __attribute__ ((noinline)) main(void)
   /* setup direction of the two LEDs */
   signal_init();
   
-  /* light both LEDs during the startup */
-  signal_set_leds(3);
+  /* light green LED during the startup */
+  signal_set_leds(1);
   
   /* turn on IOCON */
   Chip_Clock_EnablePeriphClock(SYSCTL_CLOCK_IOCON);
@@ -626,18 +745,23 @@ int __attribute__ ((noinline)) main(void)
   /* setup user key handling */
   key_init();
 
-  /* wait until (nearly) end of start up delay */
-  while( startup_delay > 2 )
+  /* wait until (nearly) end of start up delay, startup_delay counts down */
+  while( startup_delay > 3 )
     ;
   
   /* set error code to global_error_code (=0 after reset). This will also turn off the LEDs if global_error_code = 0 */
   signal_bg_set_error_code(global_error_code);
 
-  /* setup charge pump */
-  pwm_init();
+  check_short_circuit_fault();
+  
+  /* only if no error is detected */
+  if ( global_error_code == 0 )
+  {
+    /* setup charge pump */
+    pwm_init();
 
-  pwm_start();
-
+    pwm_start();
+  }
 
   /* after setting up the switch matrix, it can be turned off (will save 0.03mA) */
   //Chip_SWM_Deinit();
