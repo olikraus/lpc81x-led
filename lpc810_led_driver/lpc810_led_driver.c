@@ -56,6 +56,10 @@
   R_shunt * I_led = 3.3V * l / 31
   --> l = R_shunt * I_led * 31 / 3.3
 
+  LUXEON M	(6V,1400mA), with 700ma max, use 2 Ohm shunt
+  Power LED with 18V, 700mA, probably 1 Ohm shunt should be ok
+  
+
 
   Inductance Calculation
   
