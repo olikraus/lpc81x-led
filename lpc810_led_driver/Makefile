@@ -53,7 +53,7 @@ LDSCRIPTDIR:=.
 # Name of the linker script (must be the "keep" script, because the other script is not always working)
 LDSCRIPT:=lpc810.ld
 
-# Uinx device of the USB-RS232 converter for the flash tool
+# Unix device of the USB-RS232 converter for the flash tool
 FLASHPORT:=/dev/ttyUSB0
 
 #================================================
