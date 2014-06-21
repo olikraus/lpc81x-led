@@ -57,7 +57,7 @@
   --> l = R_shunt * I_led * 31 / 3.3
 
   LUXEON M	(6V,1400mA), with 700ma max, use 2 Ohm shunt
-  Power LED with 18V, 700mA, probably 1 Ohm shunt should be ok
+  Power LED with 18V, 700mA, probably 1.5 Ohm shunt should be ok
   Bridgelux/COB Power LED (segor.de LED 10W/ww), 900mA, ca. 9-12V, 800lm
 
 
@@ -72,7 +72,7 @@
 */
 
 /* measure resitor in milli ohm */
-#define R_SHUNT	(1300)
+#define R_SHUNT	(1500)
 /* maximum forward current of the power LED in milli ampere*/
 #define I_MAX 		(700)
 
@@ -89,11 +89,11 @@
 #define LADDER_VAL3	((R_SHUNT*I_MAX*31L)/3300000L)
 
 #if LADDER_VAL3 >= 31
-#error "input voltage to high, use smaller shunt resistor"
+#error "measurement voltage to high, use smaller shunt resistor"
 #endif
 
 #if LADDER_VAL3 <= 3
-#error "input voltage to small, use higher shunt resistor"
+#error "measurement  voltage to small, use higher shunt resistor"
 #endif
 
 #define LADDER_VAL2 (LADDER_VAL3/2)
@@ -718,7 +718,7 @@ void __attribute__ ((interrupt)) SysTick_Handler(void)
 int __attribute__ ((noinline)) main(void)
 {
 
-  /* half second startup delay with 50ms sys tick */
+  /* half second startup delay with 50ms sys tick (counts down in SysTick_Handler)*/
   startup_delay = 10;		
   
   /* set systick and start systick interrupt */
@@ -749,7 +749,7 @@ int __attribute__ ((noinline)) main(void)
   /* setup user key handling */
   key_init();
 
-  /* wait until (nearly) end of start up delay, startup_delay counts down */
+  /* wait until (nearly) end of start up delay, startup_delay counts down (decrement in SysTick_Handler) */
   while( startup_delay > 3 )
     ;
   
@@ -769,9 +769,6 @@ int __attribute__ ((noinline)) main(void)
 
   /* after setting up the switch matrix, it can be turned off (will save 0.03mA) */
   //Chip_SWM_Deinit();
-  
-  
-  
   
   
   /* enter sleep mode: Reduce from 1.4mA to 0.8mA with 12MHz */  
