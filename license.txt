@@ -28,8 +28,10 @@ copyright, permission, and disclaimer notice must appear in all copies of
 this code.
 ===
 
-This sourcecode is part of thedirectory "lpc_chip_8xx_lib" of the zipfile "lpcopen_2_01_lpcxpresso_nxp_lpcxpresso_812.zip"
-The download location of "lpcopen_2_01_lpcxpresso_nxp_lpcxpresso_812.zip" is "http://www.lpcware.com/content/nxpfile/lpcopen-software-development-platform-lpc8xx-packages"
+This sourcecode is part of the directory "lpc_chip_8xx_lib" of the zip-file "lpcopen_2_01_lpcxpresso_nxp_lpcxpresso_812.zip".
+The download location of the zip-file "lpcopen_2_01_lpcxpresso_nxp_lpcxpresso_812.zip" is 
+"http://www.lpcware.com/content/nxpfile/lpcopen-software-development-platform-lpc8xx-packages".
 
-The remaining part of the project is licensed unter GPLv3 (see gpl-3.0.txt)
+
+The remaining part of the project "lpc81x-led" is licensed unter GPLv3 (see gpl-3.0.txt).
 

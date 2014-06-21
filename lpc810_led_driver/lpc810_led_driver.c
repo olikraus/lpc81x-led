@@ -58,7 +58,7 @@
 
   LUXEON M	(6V,1400mA), with 700ma max, use 2 Ohm shunt
   Power LED with 18V, 700mA, probably 1 Ohm shunt should be ok
-  
+  Bridgelux/COB Power LED (segor.de LED 10W/ww), 900mA, ca. 9-12V, 800lm
 
 
   Inductance Calculation
