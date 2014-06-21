@@ -1,5 +1,5 @@
 
-This project contains code of the hardware interface layer, which is licensed in the
+This project (lpc81x-led) contains code of the hardware interface layer, which is licensed in the
 following way:
 
 ===
