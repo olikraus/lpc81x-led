@@ -109,7 +109,7 @@ void pwm_stop(void);
 
 /* initial startup delay */
 volatile uint8_t startup_delay;
-volatile uint8_t global_error_code = 0;	/* will be set to 0 only by reset */
+volatile uint8_t global_error_code = 0;	/* will be set to 0 by reset, 1: ADC connected to GND, 2: ADC is always at max */
 volatile uint8_t current_light_mode = 0;		/* lowest bightness */
 
 
