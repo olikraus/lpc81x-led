@@ -506,7 +506,7 @@ void __attribute__ ((noinline)) pwm_init(void)
   /* set prescalar to 1:1 (lower counter) and 1:6 (upper counter) */
   Chip_SCT_SetControl(LPC_SCT, SCT_CTRL_CLRCTR_L | SCT_CTRL_PRE_L(0) | SCT_CTRL_CLRCTR_H | SCT_CTRL_PRE_H(5));
   
-  /* match register 0 is the autolimit value, this will devide the system clock by 12 */
+  /* match register 0 is the autolimit value, this will devide the system clock by TIMER_MAX */
   LPC_SCT->MATCH_L[0] = TIMER_MAX;
   
   /* match reload for register 0 */
@@ -523,7 +523,7 @@ void __attribute__ ((noinline)) pwm_init(void)
   /* match register 1, do not change state, only consider match register */
   LPC_SCT->EVENT[0].CTRL = 1 | (1 << 12) ;
   /* apply event 0 to state 0 */
-  LPC_SCT->EVENT[0].STATE = 1;
+  LPC_SCT->EVENT[0].STATE = 1;	/* bitmask: set bit 0 to 1 for = state 0 */
   /* stop high counter with this event */
   LPC_SCT->STOP_H = 1;		/* event 0 is at bitpos 1 */
 
@@ -532,13 +532,14 @@ void __attribute__ ((noinline)) pwm_init(void)
   /* event 1 will also start the battery condition counter (high counter) */
   LPC_SCT->EVENT[1].CTRL
     = 2			/* match register */
-    | (0 << 6)		/* i/o select */
+    | (0 << 5)		/* select an input register */
+    | (0 << 6)		/* i/o select register: 0  = select CTIN_0 (here: comp. output) or CTOUT_0 */
     | (0 << 10) 		/* 11:10 IOCOND, 0=Low 1=Rise 2=Fall 3=High */
-    | (3 << 12) 		/* 13:12 COMBMODE, 0=OR 1=Match 2=I/O 3=AND */
+    | (3 << 12) 		/* 13:12 COMBMODE, 0=OR 1=Match 2=I/O 3=AND, here: match and comp. output */
     | (0<<14) 		/* 14 STATELD, 0=Add 1=Load */
     | (0<<15);		/* 19:15 STATEV */
   /* apply event 1 to state 0 */
-  LPC_SCT->EVENT[1].STATE = 1;
+  LPC_SCT->EVENT[1].STATE = 1;		/* bitmask: set bit 0 to 1 for = state 0 */
   /* start high counter with this event */
   LPC_SCT->START_H = 2;		/* event 1 is at bitpos 2 */
 
