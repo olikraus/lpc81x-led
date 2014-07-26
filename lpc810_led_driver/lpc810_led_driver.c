@@ -20,14 +20,16 @@
   
   
   
-  This project requires the files from directory "lpc_chip_8xx_lib" of the zipfile: lpcopen_2_01_lpcxpresso_nxp_lpcxpresso_812.zip
-  Download location of lpcopen_2_01_lpcxpresso_nxp_lpcxpresso_812.zip: http://www.lpcware.com/content/nxpfile/lpcopen-software-development-platform-lpc8xx-packages
+  This project requires the files from directory "lpc_chip_8xx_lib" of the zipfile: 
+      lpcopen_2_01_lpcxpresso_nxp_lpcxpresso_812.zip
+  Download location of lpcopen_2_01_lpcxpresso_nxp_lpcxpresso_812.zip: 
+      http://www.lpcware.com/content/nxpfile/lpcopen-software-development-platform-lpc8xx-packages
   
   
   ACMP reqires LPC810M021JN8 Marking 4C or later!
 
   Pin1: RESET/PIO0_5
-  Pin2: PIO0_4/WAKEUP/TRST/U0_TXD			--> Mode Button
+  Pin2: PIO0_4/WAKEUP/TRST/U0_TXD			--> Mode Button (short press: battery status, long press: current change)
   Pin3: SWCLK/PIO0_3/TCK					--> Red LED
   Pin4: SWDIO/PIO0_2/TMS					--> Green LED
   
@@ -35,8 +37,15 @@
   Pin6: VDD 3.3V supply voltage
   Pin7: VSS Ground
   Pin8: PIO0_0/ACMP_I1/CLKIN/TDI/U0_RXD		--> Step up converter: feedback input
-  
-  
+
+  Main Tasks of the Controller/content of this c-file:
+    - Step up converter for the power LED (once setup, fully done in HW with the SCT)
+    - Battery status calculation 
+    - Key/Button press debounce and check
+    - Red/Green LED control
+    - Boot code (no further assembler file required)
+    
+
   LED codes:
   1x short red flash, long blank		Error code 1: Open circuit, no LED connected, can always occur, reset or mode change required
   2x short rad flash, long blank		Error code 2: Short circuit, input voltage too high, only checked during startup, reset required
@@ -57,7 +66,7 @@
   --> l = R_shunt * I_led * 31 / 3.3
 
   LUXEON M	(6V,1400mA), with 700ma max, use 2 Ohm shunt
-  Power LED with 18V, 700mA, probably 1.5 Ohm shunt should be ok
+  Cree CXA1512 (18V, 700mA, 1200lm) probably 1.5 Ohm shunt should be ok
   Bridgelux/COB Power LED (segor.de LED 10W/ww), 900mA, ca. 9-12V, 800lm
 
 
@@ -694,6 +703,13 @@ void key_task(void)
 
 volatile uint32_t sys_tick_irq_cnt=0;
 
+
+/*
+  all controller activity is done in the sys tick handler.
+    - calculate battery condition (derived from the required step up cycles)
+    - check the mode button for beeing pressed
+    - handle flashing of the external LEDs
+*/
 void __attribute__ ((interrupt)) SysTick_Handler(void)
 {
   sys_tick_irq_cnt++;
@@ -714,7 +730,10 @@ void __attribute__ ((interrupt)) SysTick_Handler(void)
   }
 }
 
-
+/*
+  setup the hardware and start interrupts.
+  called by "Reset_Handler"
+*/
 int __attribute__ ((noinline)) main(void)
 {
 
@@ -919,3 +938,169 @@ isr_handler_t __isr_vector[48] __attribute__ ((section(".isr_vector"))) __attrib
   0,					/* PIO INT6 */
   0					/* PIO INT7 */                      
 };
+
+
+
+/* the following .ld file is required for this c-code */
+#ifdef THIS_IS_JUST_A_COMMENT
+/* source: gcc-arm-none-eabi-4_7-2013q1/share/gcc-arm-none-eabi/samples/ldscripts/mem.ld */
+
+/* Linker script to configure memory regions. 
+ * Need modifying for a specific board. 
+ *   FLASH.ORIGIN: starting address of flash
+ *   FLASH.LENGTH: length of flash
+ *   RAM.ORIGIN: starting address of RAM bank 0
+ *   RAM.LENGTH: length of RAM bank 0
+ */
+MEMORY
+{
+  FLASH (rx) : ORIGIN = 0x0, LENGTH = 0x1000 /* 4K */
+  RAM (rwx) : ORIGIN = 0x10000000, LENGTH = 0x0400 /* 1K */
+}
+
+/* source: gcc-arm-none-eabi-4_7-2013q1/share/gcc-arm-none-eabi/samples/ldscripts/sections.ld */
+
+/* Linker script to place sections and symbol values. Should be used together
+ * with other linker script that defines memory regions FLASH and RAM.
+ * It references following symbols, which must be defined in code:
+ *   Reset_Handler : Entry of reset handler
+ * 
+ * It defines following symbols, which code can use without definition:
+ *   __exidx_start
+ *   __exidx_end
+ *   __etext
+ *   __data_start__
+ *   __preinit_array_start
+ *   __preinit_array_end
+ *   __init_array_start
+ *   __init_array_end
+ *   __fini_array_start
+ *   __fini_array_end
+ *   __data_end__
+ *   __bss_start__
+ *   __bss_end__
+ *   __end__
+ *   end
+ *   __HeapLimit
+ *   __StackLimit
+ *   __StackTop
+ *   __stack
+ */
+ENTRY(Reset_Handler)
+
+SECTIONS
+{
+	.text :
+	{
+		KEEP(*(.isr_vector))
+		*(.text*)
+
+		KEEP(*(.init))
+		KEEP(*(.fini))
+
+		/* .ctors */
+		*crtbegin.o(.ctors)
+		*crtbegin?.o(.ctors)
+		*(EXCLUDE_FILE(*crtend?.o *crtend.o) .ctors)
+		*(SORT(.ctors.*))
+		*(.ctors)
+
+		/* .dtors */
+ 		*crtbegin.o(.dtors)
+ 		*crtbegin?.o(.dtors)
+ 		*(EXCLUDE_FILE(*crtend?.o *crtend.o) .dtors)
+ 		*(SORT(.dtors.*))
+ 		*(.dtors)
+
+		*(.rodata*)
+
+		KEEP(*(.eh_frame*))
+	} > FLASH
+
+	.ARM.extab : 
+	{
+		*(.ARM.extab* .gnu.linkonce.armextab.*)
+	} > FLASH
+
+	__exidx_start = .;
+	.ARM.exidx :
+	{
+		*(.ARM.exidx* .gnu.linkonce.armexidx.*)
+	} > FLASH
+	__exidx_end = .;
+
+	__etext = .;
+		
+	.data : AT (__etext)
+	{
+		__data_start__ = .;
+		*(vtable)
+		*(.data*)
+
+		. = ALIGN(4);
+		/* preinit data */
+		PROVIDE_HIDDEN (__preinit_array_start = .);
+		KEEP(*(.preinit_array))
+		PROVIDE_HIDDEN (__preinit_array_end = .);
+
+		. = ALIGN(4);
+		/* init data */
+		PROVIDE_HIDDEN (__init_array_start = .);
+		KEEP(*(SORT(.init_array.*)))
+		KEEP(*(.init_array))
+		PROVIDE_HIDDEN (__init_array_end = .);
+
+
+		. = ALIGN(4);
+		/* finit data */
+		PROVIDE_HIDDEN (__fini_array_start = .);
+		KEEP(*(SORT(.fini_array.*)))
+		KEEP(*(.fini_array))
+		PROVIDE_HIDDEN (__fini_array_end = .);
+
+		KEEP(*(.jcr*))
+		. = ALIGN(4);
+		/* All data end */
+		__data_end__ = .;
+
+	} > RAM
+
+	.bss :
+	{
+		. = ALIGN(4);
+		__bss_start__ = .;
+		*(.bss*)
+		*(COMMON)
+		. = ALIGN(4);
+		__bss_end__ = .;
+	} > RAM
+	
+	.heap (COPY):
+	{
+		__end__ = .;
+		end = __end__;
+		*(.heap*)
+		__HeapLimit = .;
+	} > RAM
+
+	/* .stack_dummy section doesn't contains any symbols. It is only
+	 * used for linker to calculate size of stack sections, and assign
+	 * values to stack symbols later */
+	.stack_dummy (COPY):
+	{
+		*(.stack*)
+	} > RAM
+
+	/* Set stack top to end of RAM, and stack limit move down by
+	 * size of stack_dummy section */
+	__StackTop = ORIGIN(RAM) + LENGTH(RAM);
+	__StackLimit = __StackTop - SIZEOF(.stack_dummy);
+	PROVIDE(__stack = __StackTop);
+	
+	/* Check if data + heap + stack exceeds RAM limit */
+	ASSERT(__StackLimit >= __HeapLimit, "region RAM overflowed with stack")
+	
+	/* http://www.lpcware.com/content/forum/lpc1788-flash-signature-generation */
+	LPC_checksum = 0- (__StackTop + Reset_Handler + NMI_Handler + HardFault_Handler + 6);
+}
+#endif /* COMMENT */
