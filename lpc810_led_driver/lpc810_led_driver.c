@@ -118,7 +118,7 @@ void pwm_stop(void);
 
 /* initial startup delay */
 volatile uint8_t startup_delay;
-volatile uint8_t global_error_code = 0;	/* will be set to 0 by reset, 1: ADC connected to GND, 2: ADC is always at max */
+volatile uint8_t global_error_code = 0;	/* will be set to 0 by reset, 1: ADC connected to GND (no LED), 2: ADC is always at max */
 volatile uint8_t current_light_mode = 0;		/* lowest bightness */
 
 
@@ -306,13 +306,20 @@ void signal_task(void)
   the battery condition task will read and reset the upper counter.
 */
 uint16_t battery_condition_raw_value = 0;
-uint8_t battery_user_value = 0;
+uint8_t battery_user_value = 0;		/* 0 = bad, 5 = good */
 uint8_t battery_error_debounce = 0;
 
 void battery_condition_task(void)
 {
-  /* read raw data, high value mean bad battery condition */
+  /* read raw data, high value means bad battery condition */
   battery_condition_raw_value = LPC_SCT->COUNT_H;
+  
+  /*
+    if battery_condition_raw_value is close to 50000, then the PWM did not skip
+    any cycle, which indicates a bad battery state. It is better if more sycles are 
+    skipped. This will lead to a lower battery_condition_raw_value value.
+  */
+
 
   /* clear high counter */
   LPC_SCT->CTRL_U |= SCT_CTRL_STOP_H;
@@ -327,20 +334,30 @@ void battery_condition_task(void)
   {
     battery_error_debounce++;
     if ( battery_error_debounce > 2 )
-      set_global_error(1); /* LED: open-circuit, Analog Comperator connected to GND only */
+      set_global_error(1); /* LED: open-circuit, Analog Comperator connected to GND only. 26.07.2014: Wrong? AC is connected to Vmax all the time */
   }
   else
   {
     battery_error_debounce = 0;
   }
+  
 
   
 
-  /* derive user value, here 0 means very bad battery condition */
-  battery_user_value = (((uint32_t)battery_condition_raw_value-0)*6UL) / 50000UL;
+  /* first, the battery_user_value is caculated from 0 (good) ..  5 (bad) */
   
-  if ( battery_user_value >= 5 )
-    battery_user_value = 5;
+  if ( battery_condition_raw_value <= 25000 )
+  {
+    battery_user_value = 0; /* this is good */
+  }
+  else
+  {
+    battery_user_value = (((uint32_t)battery_condition_raw_value-25000UL)*6UL) / 25000UL;
+    if ( battery_user_value >= 5 )
+      battery_user_value = 5;
+  }
+  
+  /* second, invert the meaning so 0 will be bad and 5 will be good */
   battery_user_value = 5- battery_user_value;
   
   //signal_set_fg_value(battery_user_value, 40);
@@ -687,12 +704,12 @@ void key_task(void)
       else if ( key_tick_cnt >= KEY_LONG_PRESS_TICKS )
       {
 	key_state = KEY_STATE_LONG_PRESS;
+	key_long_press_event();		/* event is sent as soon as the long press is detected */
       }
       break;
     case KEY_STATE_LONG_PRESS:
       if ( button_value != 0 )
       {
-	key_long_press_event();
 	key_state = KEY_STATE_WAIT;
       }
       break;
