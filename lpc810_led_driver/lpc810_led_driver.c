@@ -68,6 +68,8 @@
   LUXEON M	(6V,1400mA), with 700ma max, use 2 Ohm shunt
   Cree CXA1512 (18V, 700mA, 1200lm) probably 1.5 Ohm shunt should be ok
   Bridgelux/COB Power LED (segor.de LED 10W/ww), 900mA, ca. 9-12V, 800lm
+  3W White Round COB SMD LED, 300mA , 9-12V, 280lm
+  10W White High Power LED Light/Heat Sink  1050mA (DC-LE14274), 9-12V, 800-900lm
 
 
   Inductance Calculation
@@ -105,10 +107,11 @@
 #error "measurement  voltage to small, use higher shunt resistor"
 #endif
 
-#define LADDER_VAL2 (LADDER_VAL3/2)
+/* defining LADDER_VAL2 is optional */
+//#define LADDER_VAL2 (LADDER_VAL3/2)
 
-#define LADDER_VAL1 (LADDER_VAL3/4)
-
+//#define LADDER_VAL1 (LADDER_VAL3/4)
+#define LADDER_VAL1 (1)
 
 
 
@@ -198,6 +201,13 @@ void signal_init(void)
   Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 3);    
 }
 
+void signal_fg_off(void)
+{
+  signal_fg_tick_timer = 0;
+  signal_fg_blink_status = 0;
+  signal_set_leds(0);			/* turn off LEDs */
+}
+
 void signal_fg_task(void)
 {
   if ( signal_fg_tick_timer != 0 )
@@ -205,8 +215,9 @@ void signal_fg_task(void)
     signal_fg_tick_timer--;
     if ( signal_fg_tick_timer == 0 )
     {
-      signal_fg_blink_status = 0;
-      signal_set_leds(0);			/* turn off LEDs */
+      signal_fg_off();
+      // signal_fg_blink_status = 0;
+      //signal_set_leds(0);			/* turn off LEDs */
     }
     else
     {
@@ -302,6 +313,49 @@ void signal_task(void)
     signal_bg_task();
 }
 
+
+/* 
+  lower counter:
+    configure a simple PWM with 62.5% duty cycle
+    count from 0 to TIMER_MAX 				(autolimit, match register 0)
+    set output to LOW on value TIMER_MAX/4		(event 0, match register 1)
+    set output to HIGH on value TIMER_MAX/4+TIMER_GATE_OFF_LEN	(event 1, match register 2)
+  upper counter: 
+    free running
+    started by falling edge of the PWM
+    stopped by rising edge of the PWM
+    Prescalar is 6
+    Overflow of upper counter is 12MHz / ( 6 * 2 [50% duty] * 2^16 ) = 15 Hz  --> 65.54ms
+    Expected max value in the 50ms SysTick ISR is 2^16 * 50 / 65.54  = (ca.) 50000 
+    50 * 65536 * 12000 * 0.5 [50% duty] / (( 6 * 65536 ))
+    50  [sysclk ms] * 12000 [kHz] * 0.5 [50% duty] / 6 [prescalar]
+    #define EXPECTED_BAT_MAX (SYS_TICK_PERIOD_IN_MS*12000*TIMER_GATE_ON_LEN)/(TIMER_MAX*6)
+
+*/
+
+
+/*
+  TIMER_MAX	 	Freq.
+  120			100KHz
+  60				200KHz
+  32				375KHz
+  30				400KHz
+  24				500KHz
+  12				1MHz
+
+*/
+
+#define TIMER_MAX (30)
+//#define TIMER_GATE_OFF_LEN (TIMER_MAX/2)
+// define the 62.5% duty cycle
+#define TIMER_GATE_OFF_LEN (TIMER_MAX/2-TIMER_MAX/8)
+#define TIMER_GATE_ON_LEN (TIMER_MAX-TIMER_GATE_OFF_LEN)
+
+#define EXPECTED_BAT_MAX (SYS_TICK_PERIOD_IN_MS*12000*TIMER_GATE_ON_LEN)/(TIMER_MAX*6)
+#if EXPECTED_BAT_MAX > 65520
+#error expected battery max count overflow
+#endif
+
 /*
   the battery condition task will read and reset the upper counter.
 */
@@ -340,9 +394,7 @@ void battery_condition_task(void)
   {
     battery_error_debounce = 0;
   }
-  
 
-  
 
   /* first, the battery_user_value is caculated from 0 (good) ..  5 (bad) */
   
@@ -352,7 +404,8 @@ void battery_condition_task(void)
   }
   else
   {
-    battery_user_value = (((uint32_t)battery_condition_raw_value-25000UL)*6UL) / 25000UL;
+    battery_condition_raw_value-=25000UL;
+    battery_user_value = (((uint32_t)battery_condition_raw_value)*6UL) / (EXPECTED_BAT_MAX-25000UL);
     if ( battery_user_value >= 5 )
       battery_user_value = 5;
   }
@@ -364,33 +417,6 @@ void battery_condition_task(void)
   
 }
 
-
-/* 
-  lower counter:
-    configure a simple PWM with 50% duty cycle
-    count from 0 to TIMER_MAX 				(autolimit, match register 0)
-    set output to HIGH on value TIMER_MAX/4		(event 0, match register 1)
-    set output to LOW on value TIMER_MAX*3/4	(event 1, match register 2)
-  upper counter: 
-    free running
-    started by falling edge of the PWM
-    stopped by rising edge of the PWM
-    Prescalar is 6
-    Overflow of upper counter is 12MHz / ( 6 * 2 * 2^16 ) = 15 Hz  --> 65.54ms
-    Expected max value in the 50ms SysTick ISR is 2^16 * 65.54 / 50 = (ca.) 50000 
-    
-*/
-
-/*
-  TIMER_MAX	 	Freq.
-  120			100KHz
-  60				200KHz
-  30				400KHz
-  12				1MHz
-
-*/
-
-#define TIMER_MAX (60)
 
 /*
   disable PWM and put everything into a safe state.
@@ -432,6 +458,7 @@ void analog_comperator_setup_ladder(uint32_t ladsel)
 */
 void set_light_mode(uint8_t mode)
 {
+#ifdef LADDER_VAL2
   switch(mode)
   {
     default:
@@ -445,6 +472,18 @@ void set_light_mode(uint8_t mode)
       analog_comperator_setup_ladder(LADDER_VAL3);
       break;
   }
+#else
+  switch(mode)
+  {
+    default:
+    case 0:
+      analog_comperator_setup_ladder(LADDER_VAL1);
+      break;
+    case 1:
+      analog_comperator_setup_ladder(LADDER_VAL3);
+      break;
+  }
+#endif
 }
 
 
@@ -515,7 +554,7 @@ void __attribute__ ((noinline)) pwm_init(void)
   /* program match values for a 50% duty cycle */
   LPC_SCT->MATCH_L[1] = TIMER_MAX/4;
   //LPC_SCT->MATCHREL_L[1] = 20;
-  LPC_SCT->MATCH_L[2] = TIMER_MAX/4+TIMER_MAX/2;
+  LPC_SCT->MATCH_L[2] = TIMER_MAX/4+TIMER_GATE_OFF_LEN;
   //LPC_SCT->MATCHREL_L[2] = 20+60;
   
   
@@ -665,8 +704,14 @@ void key_long_press_event(void)
     pwm_start();
   }
   current_light_mode++;
+#ifdef LADDER_VAL2
   if ( current_light_mode >= 3 )
     current_light_mode = 0;
+#else
+  if ( current_light_mode >= 2 )
+    current_light_mode = 0;
+#endif
+  signal_fg_off();
   set_light_mode(current_light_mode);
 }
 
