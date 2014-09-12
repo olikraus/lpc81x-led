@@ -3,3 +3,6 @@ LPC81x LED Driver ChangeLog
 
 2014-04-20	v0.01	Oliver Kraus <olikraus@gmail.com>
 	* Initial checkin
+2014-09-12	v0.02	Oliver Kraus <olikraus@gmail.com>
+	* Production release with high/low mode and battery indicator
+	* added batch file for windows
