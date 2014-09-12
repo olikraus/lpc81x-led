@@ -84,8 +84,18 @@
 
 /* measure resitor in milli ohm */
 #define R_SHUNT	(1500)
+
 /* maximum forward current of the power LED in milli ampere*/
 #define I_MAX 		(700)
+
+/* number of seconds until shutdown of the Power LED */
+/* 15 minutes */
+#define OPERATION_TIMEOUT_IN_SECONDS (15*60)
+
+/* number of seconds until fallback to low power mode */
+/* 2 minutes */
+#define HIGH_LED_TIMEOUT_IN_SECONDS (2*60)
+
 
 
 
@@ -117,6 +127,8 @@
 
 /* forward declarations */
 void pwm_stop(void);
+void timeout_ResetOperationTimeoutWithOptionalPWMRestart(void);
+void timeout_ResetHighLedModeTimeout(void);
 
 
 /* initial startup delay */
@@ -124,6 +136,8 @@ volatile uint8_t startup_delay;
 volatile uint8_t global_error_code = 0;	/* will be set to 0 by reset, 1: ADC connected to GND (no LED), 2: ADC is always at max */
 volatile uint8_t current_light_mode = 0;		/* lowest bightness */
 
+/*=======================================================================*/
+/* duo LED/user signal handling, includes signal_task */
 
 /* inputs */
 
@@ -244,6 +258,10 @@ uint8_t signal_bg_color = 2;		/* bit 0: green, bit 1: red */
 uint8_t signal_bg_tick_cnt = 0;
 uint8_t signal_bg_fast_blink_state = 0;
 
+/*
+  set blinking for global error code
+  signal_bg_set_error_code(0) is used to disable blinking
+*/
 void signal_bg_set_error_code(uint8_t error_value)
 {
   signal_bg_fast_blink_times = error_value;
@@ -253,6 +271,24 @@ void signal_bg_set_error_code(uint8_t error_value)
   signal_bg_tick_cnt = 0;
   signal_bg_fast_blink_state = 0;
   signal_set_leds(0);  
+}
+
+void signal_bg_set_standby_blink(uint8_t is_enable)
+{
+  if ( is_enable == 0 )
+  {
+    signal_bg_set_error_code(0);
+  }
+  else
+  {
+    signal_bg_fast_blink_times = 1;
+    signal_bg_fast_blink_ticks = 1;
+    signal_bg_long_delay_ticks = 20*3;	/* 3 seconds */
+    signal_bg_color = 1;	/* green */
+    signal_bg_tick_cnt = 0;
+    signal_bg_fast_blink_state = 0;
+    signal_set_leds(0);  
+  }
 }
 
 void set_global_error(uint8_t error_code)
@@ -312,6 +348,9 @@ void signal_task(void)
   else
     signal_bg_task();
 }
+
+/*=======================================================================*/
+/* battery monitoring task */
 
 
 /* 
@@ -417,6 +456,9 @@ void battery_condition_task(void)
   
 }
 
+/*=======================================================================*/
+/* setup for power LED current control (does not include a task handler, because this is done by the LPC without software) */
+
 
 /*
   disable PWM and put everything into a safe state.
@@ -429,6 +471,7 @@ void pwm_stop(void)
   /* stop and halt both timers */
   LPC_SCT->CTRL_U |= SCT_CTRL_HALT_L|SCT_CTRL_HALT_H|SCT_CTRL_STOP_L|SCT_CTRL_STOP_H;
   
+  Chip_SWM_MovablePinAssign( SWM_CTOUT_0_O, 0 );	/* disable movable pin assignment */
   Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 1);	/* port 0, pin 1: MOSFET Gate */
   Chip_GPIO_SetPinOutLow(LPC_GPIO_PORT, 0, 1);    		/* Set MOSFET Gate to 0 Volt, this will disallow current to flow though the MOSFET */
 }
@@ -522,6 +565,9 @@ void pwm_start(void)
   LPC_SCT->CTRL_U &= ~SCT_CTRL_HALT_H;	
   LPC_SCT->CTRL_U &= ~SCT_CTRL_STOP_H;
   
+  /* assign SCT output CTOUT_0 to gpio port 0, pin 1 */
+  Chip_GPIO_SetPinDIROutput(LPC_GPIO_PORT, 0, 1);	/* port 0, pin 1 */
+  Chip_SWM_MovablePinAssign( SWM_CTOUT_0_O, 1 );
   
 }
 
@@ -663,6 +709,9 @@ void check_short_circuit_fault(void)
   
 }
 
+/*=======================================================================*/
+/* key event monitoring and key_task */
+
 void key_init(void)
 {
   Chip_IOCON_PinSetMode(LPC_IOCON, IOCON_PIO4, PIN_MODE_PULLUP);
@@ -727,6 +776,10 @@ void key_task(void)
 	key_tick_cnt = 0;
 	key_state = KEY_STATE_DEBOUNCE;
 	key_raw_event();
+	
+	/* key aktivity detected, reset timeout values */
+	timeout_ResetOperationTimeoutWithOptionalPWMRestart();
+	timeout_ResetHighLedModeTimeout();
       }
       break;
     case KEY_STATE_DEBOUNCE:
@@ -738,6 +791,7 @@ void key_task(void)
       else if ( key_tick_cnt >= KEY_MIN_PRESS_TICKS )
       {
 	key_state = KEY_STATE_SHORT_PRESS;
+	
       }
       break;
     case KEY_STATE_SHORT_PRESS:
@@ -760,9 +814,73 @@ void key_task(void)
       }
       break;
   }
+}
+
+/*=======================================================================*/
+/* timeout handling */
+volatile uint32_t remaining_time_high_led_mode;
+volatile uint32_t remaining_time_for_operation;
+
+void timeout_ResetHighLedModeTimeout(void)
+{
+  remaining_time_high_led_mode = (HIGH_LED_TIMEOUT_IN_SECONDS*1000UL)/SYS_TICK_PERIOD_IN_MS;
+}
+
+void timeout_ResetOperationTimeout(void)
+{
+  remaining_time_for_operation = (OPERATION_TIMEOUT_IN_SECONDS*1000UL)/SYS_TICK_PERIOD_IN_MS;
+}
+
+void timeout_ResetOperationTimeoutWithOptionalPWMRestart(void)
+{
+  if ( remaining_time_for_operation == 0 )
+  {
+    signal_bg_set_standby_blink(0);	/* disable standby blink */
+    pwm_start();
+  }
+  timeout_ResetOperationTimeout();
+}
+
+void timeout_task(void)
+{
+  
+  if ( remaining_time_for_operation == 0 )
+  {
+    /* do nothing, maybe check, if the mosfet is really switched off */
+  }
+  else
+  {
+    remaining_time_for_operation--;
+    if ( remaining_time_for_operation == 0 )
+    {
+      pwm_stop();
+      signal_bg_set_standby_blink(1);	/* enable standby blink */
+    }
+  }
+
+  
+  if ( remaining_time_high_led_mode == 0 )
+  {
+    /* force low current light mode if any high power mode is active */
+    if ( current_light_mode > 0 )
+    {
+      current_light_mode = 0;
+      set_light_mode(current_light_mode);
+    }
+  }
+  else
+  {
+    remaining_time_high_led_mode--;
+  }
   
 }
 
+
+
+
+
+/*=======================================================================*/
+/* system procedures and sys tick master task */
 
 volatile uint32_t sys_tick_irq_cnt=0;
 
@@ -790,6 +908,7 @@ void __attribute__ ((interrupt)) SysTick_Handler(void)
     
     key_task();    
     signal_task();
+    timeout_task();
   }
 }
 
@@ -830,6 +949,10 @@ int __attribute__ ((noinline)) main(void)
 
   /* setup user key handling */
   key_init();
+  
+  /* setup timeouts */
+  timeout_ResetOperationTimeout();
+  timeout_ResetHighLedModeTimeout();
 
   /* wait until (nearly) end of start up delay, startup_delay counts down (decrement in SysTick_Handler) */
   while( startup_delay > 3 )
@@ -861,7 +984,7 @@ int __attribute__ ((noinline)) main(void)
   }
 }
 
-/*================================================================*/
+/*=======================================================================*/
 /* 
   Reserve some space for the stack. This is used to check if global variables + stack exceed RAM size.
   If -Wl,--gc-sections is used, then also define -Wl,--undefined=arm_stack_area to keep the variable in RAM.
@@ -875,7 +998,7 @@ int __attribute__ ((noinline)) main(void)
 unsigned char arm_stack_area[__STACK_SIZE] __attribute__ ((section(".stack"))) __attribute__ ((aligned(8)));
 
 
-/*================================================================*/
+/*=======================================================================*/
 /* isr system procedures */
 
 /* make the top of the stack known to the c compiler, value will be calculated by the linker script */
@@ -945,7 +1068,7 @@ void __attribute__ ((interrupt)) HardFault_Handler(void)
 /* make the checksum known to the c compiler, value will be calculated by the linker script */
 void LPC_checksum(void);
 
-/*================================================================*/
+/*=======================================================================*/
 /* isr vector */
 
 typedef void (*isr_handler_t)(void);
@@ -1167,3 +1290,4 @@ SECTIONS
 	LPC_checksum = 0- (__StackTop + Reset_Handler + NMI_Handler + HardFault_Handler + 6);
 }
 #endif /* COMMENT */
+

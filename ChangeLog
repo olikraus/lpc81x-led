@@ -6,3 +6,7 @@ LPC81x LED Driver ChangeLog
 2014-09-12	v0.02	Oliver Kraus <olikraus@gmail.com>
 	* Production release with high/low mode and battery indicator
 	* added batch file for windows
+2014-xx-xx	v0.03	Oliver Kraus <olikraus@gmail.com>
+	* Fixed level for MOSFET gate in pwm_stop mode
+	* added timeouts
+	
