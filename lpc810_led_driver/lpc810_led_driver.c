@@ -49,6 +49,7 @@
   LED codes:
   1x short red flash, long blank		Error code 1: Open circuit, no LED connected, can always occur, reset or mode change required
   2x short rad flash, long blank		Error code 2: Short circuit, input voltage too high, only checked during startup, reset required
+  1x short green flash, long blank		Standby mode (after PowerLED shutdown)
   permanently green				(A) Indicates startup delay, (B) indicates very good battery condition
   blink red, permanently green		Indicates very good battery condition
   permanently red and green			Indicates good battery condition
@@ -57,7 +58,7 @@
   blink red						Indicates very poor battery condition
 
   User key:
-  Short press: 						Indicate Battery
+  Short press: 						Indicate Battery-Status / Wakeup from standby
   Long press:						Switch light mode 100%, 50%, 25%, also recovers from Error code 1 (if possible)
 
 
@@ -88,13 +89,13 @@
 /* maximum forward current of the power LED in milli ampere*/
 #define I_MAX 		(700)
 
+/* number of seconds until fallback to low power mode from high power mode */
+/* 2 minutes */
+#define HIGH_LED_TIMEOUT_IN_SECONDS (2*60)
+
 /* number of seconds until shutdown of the Power LED */
 /* 15 minutes */
 #define OPERATION_TIMEOUT_IN_SECONDS (15*60)
-
-/* number of seconds until fallback to low power mode */
-/* 2 minutes */
-#define HIGH_LED_TIMEOUT_IN_SECONDS (2*60)
 
 
 
