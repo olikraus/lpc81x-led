@@ -83,7 +83,7 @@
 
 */
 
-/* measure resitor in milli ohm */
+/* measure resistor in milli ohm */
 #define R_SHUNT	(1500)
 
 /* maximum forward current of the power LED in milli ampere*/
