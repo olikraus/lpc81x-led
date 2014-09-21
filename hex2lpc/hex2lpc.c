@@ -345,9 +345,10 @@ int ihex_read_file(const char *filename)
 
 int uart_fd = 0;
 struct termios uart_io;
-#define UART_IN_BUF_LEN 1024
+/* in_buf should be large enough to read a complete sector with some additional overhead */
+#define UART_IN_BUF_LEN (1024*48)
 unsigned char uart_in_buf[UART_IN_BUF_LEN];
-int uart_in_pos = 0;
+unsigned long uart_in_pos = 0;
 
 
 int uart_is_synchronized = 0;
@@ -459,6 +460,7 @@ void uart_read_more(void)
 		if ( c >= 0 )
 		{
 			// printf("[%lu %d %c]\n", received_chars, c, c < ' ' ? ' ' : c);
+			time(&start);
 			received_chars++;
 		}
 	}
@@ -477,12 +479,13 @@ void uart_read_more(void)
 	for(;;)
 	{
 		curr = clock();
-		if ( start + CLOCKS_PER_SEC <= curr )
+		if ( start + CLOCKS_PER_SEC/4 <= curr )
 			break;
 		c =uart_read_byte();
 		if ( c >= 0 )
 		{
 			// printf("[%lu %d %c]\n", received_chars, c, c < ' ' ? ' ' : c);
+			start = clock();			/* reset clock */
 			received_chars++;
 		}
 	}
@@ -503,13 +506,13 @@ int uart_send_startup(void)
 	uart_reset_in_buf();
 	uart_send_str(UART_STR_SYNCHRONIZED "\r\n");
 	uart_read_more();
-	if ( strncmp(uart_in_buf, UART_STR_SYNCHRONIZED, strlen(UART_STR_SYNCHRONIZED)) == 0 )
+	if ( strncmp((const char *)uart_in_buf, UART_STR_SYNCHRONIZED, strlen(UART_STR_SYNCHRONIZED)) == 0 )
 	{
 		/* yes, synchronized, send clock speed */
 		uart_reset_in_buf();
 		uart_send_str(UART_STR_12000 "\r\n");
 		uart_read_more();		
-		if ( strncmp(uart_in_buf, UART_STR_12000, strlen(UART_STR_12000)) == 0 )
+		if ( strncmp((const char *)uart_in_buf, UART_STR_12000, strlen(UART_STR_12000)) == 0 )
 		{
 			/* yes, synchronized */
 			return 1;
@@ -549,7 +552,7 @@ int uart_synchronize(int is_retry_quiet)
 		else
 		{
 			/* check if the controller did response with the synchronized command */
-			if ( strncmp(uart_in_buf, UART_STR_SYNCHRONIZED, strlen(UART_STR_SYNCHRONIZED)) == 0 )
+			if ( strncmp((const char *)uart_in_buf, UART_STR_SYNCHRONIZED, strlen(UART_STR_SYNCHRONIZED)) == 0 )
 			{
 				/* "Synchronized" recevied, send startup */
 				msg("controller synchronize request");
@@ -573,6 +576,19 @@ int uart_synchronize(int is_retry_quiet)
 	return uart_is_synchronized;
 }
 
+int uart_read_from_adr(unsigned long adr, unsigned long cnt)
+{
+  char s[32];
+  if ( cnt > UART_IN_BUF_LEN-64 )
+    return 0;
+  sprintf(s, "R %lu %lu\r\n", adr, cnt);
+  uart_reset_in_buf();
+  uart_send_str(s);
+  uart_read_more();		
+  printf("read operation, uart_in_pos = %lu\n", uart_in_pos);
+  return 1;
+}
+
 
 /*================================================*/
 /* main */
@@ -591,6 +607,9 @@ int main(int argc, char **argv)
 				break;
 		}
 	}
+	uart_read_from_adr(0, 40);
+
+
 	
 	return 0;
 }
