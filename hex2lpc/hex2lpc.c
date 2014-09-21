@@ -364,6 +364,68 @@ void uart_reset_in_buf(void)
 	uart_in_pos = 0;
 }
 
+void uart_show_in_buf(void)
+{
+  unsigned long i,j;
+  i = 0;
+  while( i < uart_in_pos )
+  {
+    for( j = 0; j < 16; j++ )
+    {
+      if ( i + j < uart_in_pos )
+	printf("%02x ", uart_in_buf[i+j]);
+      else
+	printf("   ");
+    }
+
+    for( j = 0; j < 16; j++ )
+    {
+      if ( i + j < uart_in_pos && uart_in_buf[i+j] >= 32 && uart_in_buf[i+j] <= 127 )
+	printf("%c", uart_in_buf[i+j]);
+      else
+	printf(".");
+    }
+    printf("\n");
+    i += j;
+  }
+}
+
+/* get the LPC error/result code from the end of the buffer */
+int uart_get_result_code(void)
+{
+  int code = 0;
+  unsigned long i = uart_in_pos;
+  if ( i == 0 )
+    return -1;
+  i--;
+  if ( uart_in_buf[i] == '\n' || uart_in_buf[i] == '\r' )
+  {
+    if ( i == 0 )
+      return -1;
+    i--;
+  }
+  if ( uart_in_buf[i] == '\n' || uart_in_buf[i] == '\r' )
+  {
+    if ( i == 0 )
+      return -1;
+    i--;
+  }
+  if ( uart_in_buf[i] >= '0' && uart_in_buf[i] <= '9' )
+  {
+    code = uart_in_buf[i] - '0';
+    if ( i == 0 )
+      return code;
+    i--;
+    if ( uart_in_buf[i] >= '0' && uart_in_buf[i] <= '9' )
+    {
+      code = (uart_in_buf[i] - '0')*10 + code;
+    }
+    return code;
+  }
+  return -1;
+  
+}
+
 /*
 	values for baud are:
 		B1200
@@ -493,6 +555,10 @@ void uart_read_more(void)
 }
 #endif 
 
+/*================================================*/
+/* LPC communication  */
+
+
 /*
 	set the uart_is_synchronized flag
 	return the flag value.
@@ -576,19 +642,137 @@ int uart_synchronize(int is_retry_quiet)
 	return uart_is_synchronized;
 }
 
-int uart_read_from_adr(unsigned long adr, unsigned long cnt)
+/*
+  Read from controller memory. Result will be placed in uart_in_buf
+  Return value contains the start index in uart_in_buf or is -1 if the read has failed
+*/
+long uart_read_from_adr(unsigned long adr, unsigned long cnt)
 {
   char s[32];
   if ( cnt > UART_IN_BUF_LEN-64 )
-    return 0;
+    return err("wrong args for read memory"), -1;
   sprintf(s, "R %lu %lu\r\n", adr, cnt);
   uart_reset_in_buf();
   uart_send_str(s);
-  uart_read_more();		
-  printf("read operation, uart_in_pos = %lu\n", uart_in_pos);
-  return 1;
+  uart_read_more();
+  if ( uart_in_pos < 3+cnt )
+    return err("read memory failed (too less data)"), -1;
+  
+  /* check for success code */
+  if ( uart_in_buf[uart_in_pos-cnt-3] != '0'  )
+    return err("read memory failed (illegal return code)"), -1;
+  
+  //printf("read operation, uart_in_pos = %lu, result stats at %ld\n", uart_in_pos, uart_in_pos-cnt);
+  return uart_in_pos-cnt;
 }
 
+/*
+  read part number, also returned as result
+*/
+unsigned long uart_read_part_numer(void)
+{
+  unsigned long id, cnt, i;
+  uart_reset_in_buf();
+  uart_send_str("J\r\n");
+  uart_read_more();
+  if ( uart_in_pos < 5 )
+    return err("read part number failed (too less data)"), 0;
+
+  uart_in_buf[uart_in_pos] = '\0';
+  
+  /* check for success code */
+  i = 0;
+  while( i < uart_in_pos )
+  {
+    if ( uart_in_buf[i] == '0' )
+    {
+      i++;
+      while( uart_in_buf[i] == '\r' || uart_in_buf[i] == '\n')
+      {
+	i++;
+      }
+      id = strtoul(uart_in_buf+i, NULL, 10);
+      return id;
+    }
+    i++;
+  }
+  return err("read part number failed (illegal return code)"), 0;
+  
+}
+
+
+/*================================================*/
+/* LPC type identification */
+
+struct _lpc_struct
+{
+  char *name;
+  unsigned long part_id;
+  unsigned long flash_size;
+  unsigned long sector_size;
+};
+typedef struct _lpc_struct lpc_struct;
+
+lpc_struct lpc_list[] = {
+/* name, part_id, flash_size, sector_size */
+{"LPC810M021FN8", 0x00008100, 0x1000,0x0400 },
+{"LPC811M001JDH16", 0x00008110, 0x2000,0x0400 },
+{"LPC812M101JDH16", 0x00008120, 0x4000,0x0400 },
+{"LPC812M101JD20", 0x00008121, 0x4000,0x0400 },
+{"LPC812M101JDH20", 0x00008122, 0x4000,0x0400 },
+{"LPC812M101JTB16", 0x00008122, 0x4000,0x0400 }
+};
+
+unsigned long lpc_part_id = 0;
+lpc_struct *lpc_part = NULL;
+
+lpc_struct *lpc_find_by_part_id(unsigned long part_id)
+{
+  int i;
+  for( i = 0; i < sizeof(lpc_list)/sizeof(*lpc_list); i++ )
+  {
+    if ( part_id == lpc_list[i].part_id )
+      return lpc_list+i;
+  }
+  return NULL;
+}
+
+/*
+  requires, that lpc_part has been set correctly
+*/
+int lpc_erase_all(void)
+{
+  int i;
+  char s[32];
+  unsigned long sector_cnt;
+  int result_code;
+
+  if ( lpc_part == NULL )
+    return 0;
+
+  sector_cnt = lpc_part->flash_size / lpc_part->sector_size;
+  sector_cnt--;
+  sprintf(s, "E 0 %lu\r\n", sector_cnt);
+  uart_reset_in_buf();
+  uart_send_str(s);
+
+  for( i = 0; i < 4*5; i++)
+  {
+    uart_read_more();
+    
+    result_code = uart_get_result_code();
+    if ( result_code > 0 )
+      return err("flash erase failed (%d)", result_code), 0;
+    else if ( result_code == 0 )
+      return 1;
+  }
+  return err("flash timeout"), 0;
+  
+  //uart_show_in_buf();
+  
+  return 1;
+  
+}
 
 /*================================================*/
 /* main */
@@ -607,9 +791,25 @@ int main(int argc, char **argv)
 				break;
 		}
 	}
-	uart_read_from_adr(0, 40);
-
-
+	
+	/* read part number */
+	lpc_part_id = uart_read_part_numer();
+	msg("received part id 0x%08x", lpc_part_id);
+	
+	/*  check if the part number is known */
+	lpc_part = lpc_find_by_part_id(lpc_part_id);
+	if ( lpc_part == NULL )
+	{
+	  err("unknown controller");
+	  return 0;
+	}
+	
+	msg("controller %s with %lu bytes flash memory", lpc_part->name, lpc_part->flash_size);
+	
+	lpc_erase_all();
+	
+	//uart_read_from_adr(0, 32);
+	uart_show_in_buf();
 	
 	return 0;
 }
