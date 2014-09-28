@@ -400,6 +400,7 @@ int ihex_read_file(const char *filename)
 	ihex_fp = fopen(filename, "rb");
 	if ( ihex_fp == NULL )
 		return err("ihex: open error %s", filename), 0;
+	msg("intel hex file %s", filename);
 	if ( ihex_read_fp() == 0 )
 	{
 		fclose(ihex_fp);
@@ -418,7 +419,7 @@ struct termios uart_io;
 #define UART_IN_BUF_LEN (1024*48)
 unsigned char uart_in_buf[UART_IN_BUF_LEN];
 unsigned long uart_in_pos = 0;
-
+unsigned long wait_time_in_clk_ticks = CLOCKS_PER_SEC/4;
 
 int uart_is_synchronized = 0;
 
@@ -513,6 +514,16 @@ int uart_open(const char *device, int baud)
 	uart_is_synchronized = 0;
 	uart_reset_in_buf();
 	
+	switch(baud)
+	{
+	  case B57600:
+	  case B115200:
+	  case B230400:
+	    wait_time_in_clk_ticks = CLOCKS_PER_SEC/8;
+	    break;	    
+	}
+	
+  
 	uart_fd=open(device, O_RDWR|O_NONBLOCK|O_NDELAY);
 	if ( uart_fd < 0 )
 		return perror(device), err("uart: %s error", device), 0;
@@ -670,7 +681,7 @@ void uart_read_more(void)
 	for(;;)
 	{
 		curr = clock();
-		if ( start + CLOCKS_PER_SEC/4 <= curr )
+		if ( start + wait_time_in_clk_ticks <= curr )
 			break;
 		c =uart_read_byte();
 		if ( c >= 0 )
@@ -800,7 +811,7 @@ long uart_read_from_adr(unsigned long adr, unsigned long cnt)
 */
 unsigned long uart_read_part_numer(void)
 {
-  unsigned long id, cnt, i;
+  unsigned long id, i;
   uart_reset_in_buf();
   uart_send_str("J\r\n");
   uart_read_more();
@@ -820,7 +831,7 @@ unsigned long uart_read_part_numer(void)
       {
 	i++;
       }
-      id = strtoul(uart_in_buf+i, NULL, 10);
+      id = strtoul((const char *)uart_in_buf+i, NULL, 10);
       return id;
     }
     i++;
@@ -898,7 +909,6 @@ int lpc_prepare_sectors(unsigned long start_sector, unsigned long end_sector)
 {
   int i;
   char s[32];
-  unsigned long sector_cnt;
   int result_code;
 
   if ( lpc_part == NULL )
@@ -982,7 +992,6 @@ int lpc_erase_all(void)
 */
 int lpc_page_download_to_ram(unsigned long size, unsigned char *buf)
 {
-  unsigned long i;
   char s[32];
   int result_code;
 
@@ -1005,25 +1014,12 @@ int lpc_page_download_to_ram(unsigned long size, unsigned char *buf)
   {
     uart_send_bytes(size, buf);
     uart_send_cnt_bytes(lpc_part->ram_buf_size-size, 0x0ff);
-    /*
-    for( i = size; i < lpc_part->ram_buf_size; i++ )
-      uart_send_byte(0x0ff);    
-    */
   }
   else
   {
     uart_send_bytes(lpc_part->ram_buf_size, buf);
   }
   
-  /*
-  for( i = 0; i < lpc_part->ram_buf_size; i++ )
-  {
-    if ( i < size )
-      uart_send_byte(buf[i]);
-    else
-      uart_send_byte(0x0ff);
-  }
-  */
   uart_read_more();
   return 1;  
 }
@@ -1038,14 +1034,12 @@ int lpc_page_download_to_ram(unsigned long size, unsigned char *buf)
 */
 int lpc_page_compare(unsigned long adr, unsigned long size, unsigned char *buf)
 {
-  unsigned long i;
   char s[32];
-  int result_code;
 
   if ( lpc_part == NULL )
     return 0;
 
-  msg("compare with data at 0x%08x", adr);
+  msg("verify with data at 0x%08x", adr);
   
   sprintf(s, "R %lu %lu\r\n", adr, lpc_part->ram_buf_size);
   uart_reset_in_buf();
@@ -1053,10 +1047,10 @@ int lpc_page_compare(unsigned long adr, unsigned long size, unsigned char *buf)
   uart_read_more();
   
   if ( uart_in_pos < lpc_part->ram_buf_size )
-    return err("page compare failure (too less data)"), 0;
+    return err("page verify failure (too less data)"), 0;
 
   if ( memcmp(buf, uart_in_buf+uart_in_pos-lpc_part->ram_buf_size,size) != 0 )
-    return err("page compare failed (not equal)"), 0;
+    return err("page verify failed (not equal)"), 0;
 
   return 1;
 }
@@ -1173,10 +1167,11 @@ int lpc_flash_ihex(void)
     }
   }
   
+  msg("success");
   return 1;
 }
 
-unsigned long arm_calculate_vector_table_crc(void)
+void arm_calculate_vector_table_crc(void)
 {
   int i;
   unsigned long crc;
@@ -1202,7 +1197,7 @@ unsigned long arm_calculate_vector_table_crc(void)
   vector |= ((unsigned long)fmem_get_byte(adr++)) << 16;
   vector |= ((unsigned long)fmem_get_byte(adr++)) << 24;
   
-  msg("ARM crc calculated = 0x%08lx, found = 0x%08lx", crc, vector);
+  msg("LPC crc calculated = 0x%08lx, crc found = 0x%08lx", crc, vector);
       
   /* overwrite crc in the ihex file */
   adr = 7*4;
@@ -1222,7 +1217,7 @@ int main(int argc, char **argv)
 {
 	ihex_read_file("../lpc810_led_driver/lpc810_led_driver.hex");
 	arm_calculate_vector_table_crc();
-	fmem_show();
+	//fmem_show();
 	//uart_open("/dev/ttyUSB0", B9600);
 	//uart_open("/dev/ttyUSB0", B19200);
 	if ( uart_open("/dev/ttyUSB0", B57600) == 0 )
@@ -1255,9 +1250,7 @@ int main(int argc, char **argv)
 	
 	lpc_unlock();
 	
-	// lpc_flash_ihex();
-	
-	//lpc_erase_all();
+	lpc_flash_ihex(); /* erase and flash procedure */
 	
 	//lpc_page_download_to_ram(6, "ABCabc");
 	//lpc_page_compare(lpc_part->ram_buf_adr, 6, "ABCabc");
@@ -1266,13 +1259,12 @@ int main(int argc, char **argv)
 	//lpc_erase_all();
 	//lpc_page_write_flash_verify(6, "ABCabc", 0x00000800);
 	
-	
 	//uart_read_from_adr(0, 32);
 	//uart_read_from_adr(0, 32);
 	//uart_show_in_buf();
 
-	uart_read_from_adr(0x00000800, 32);
-	uart_show_in_buf();
+	//uart_read_from_adr(0x00000800, 32);
+	//uart_show_in_buf();
 	//uart_read_from_adr(0x10000300, 256);
 	//uart_show_in_buf();
 	
