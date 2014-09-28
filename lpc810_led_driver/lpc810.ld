@@ -41,7 +41,13 @@ MEMORY
  *   __StackTop
  *   __stack
  */
+ 
+/* entry point */
 ENTRY(Reset_Handler)
+
+/* extern declaration so that the value appears correctly for the LPC checksum calculation */
+EXTERN(NMI_Handler)
+EXTERN(HardFault_Handler)
 
 SECTIONS
 {
@@ -156,5 +162,5 @@ SECTIONS
 	ASSERT(__StackLimit >= __HeapLimit, "region RAM overflowed with stack")
 	
 	/* http://www.lpcware.com/content/forum/lpc1788-flash-signature-generation */
-	LPC_checksum = 0- (__StackTop + Reset_Handler + NMI_Handler + HardFault_Handler + 6);
+	LPC_checksum = 0- (__StackTop + Reset_Handler + NMI_Handler + HardFault_Handler + 3 /* three entries */);
 }

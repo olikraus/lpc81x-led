@@ -2,14 +2,13 @@
 
 	hex2lpc.c
 
-	
-
 */
 
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -18,6 +17,8 @@
 #include <unistd.h>
 
 #include <time.h>
+
+#define UART_BLOCKSIZE 4
 
 /* forward declarations */
 int fmem_store_data(unsigned long adr, unsigned long cnt, unsigned char *data);
@@ -135,6 +136,7 @@ int fmem_add_data(unsigned long adr, unsigned long cnt, unsigned char *data)
 	{
 		if ( mb_set_data_size(mb, cnt) != 0 )
 		{
+			memcpy(mb->data, data, cnt);
 			while( fmem_mb_list_cnt >= fmem_mb_list_max )
 				if ( fmem_expand() == 0 )
 				{
@@ -176,6 +178,73 @@ void fmem_show(void)
 		mb = fmem_mb_list[i];
 		printf("%lu/%lu: adr=0x%08lx cnt=%lu\n", i+1, fmem_mb_list_cnt, mb->adr, mb->cnt);
 	}
+}
+
+/*
+  copy memory from fmem to a target buffer
+  any data, which is NOT in the fmem will be set to 0xff
+  return  1 if data has been copied to buf (intersection with the ihex data)
+*/
+int fmem_copy(unsigned long adr, unsigned long size, unsigned char *buf)
+{
+  unsigned long i, j;
+  mb_struct *mb;
+  int r = 0;
+  
+  memset(buf, 0xff, size);
+  
+  j = 0;
+  while( j < size )
+  {
+    for( i = 0; i < fmem_mb_list_cnt; i++ )
+    {
+	    mb = fmem_mb_list[i];
+	    if ( adr >= mb->adr && adr < mb->adr+mb->cnt )
+	    {
+	      /*
+	      assert(j < size);
+	      assert(adr  >= mb->adr);
+	      assert(adr - mb->adr < mb->cnt );
+	      */
+	      buf[j] = mb->data[adr - mb->adr];
+	      r = 1;
+	    }
+    }
+    adr++;
+    j++;
+  }
+  return r;
+}
+
+unsigned char fmem_get_byte(unsigned long adr)
+{
+    unsigned long i;
+    mb_struct *mb;
+    for( i = 0; i < fmem_mb_list_cnt; i++ )
+    {
+      mb = fmem_mb_list[i];
+      if ( adr >= mb->adr && adr < mb->adr+mb->cnt )
+      {
+	//printf("adr: %08lx data: %x\n",adr,  mb->data[adr - mb->adr]);
+	return mb->data[adr - mb->adr];
+      }
+    }
+    return 0xff;
+}
+
+void fmem_set_byte(unsigned long adr, unsigned char val)
+{
+    unsigned long i;
+    mb_struct *mb;
+    for( i = 0; i < fmem_mb_list_cnt; i++ )
+    {
+      mb = fmem_mb_list[i];
+      if ( adr >= mb->adr && adr < mb->adr+mb->cnt )
+      {
+	//printf("adr: %08lx data: %x\n",adr,  mb->data[adr - mb->adr]);
+	mb->data[adr - mb->adr] = val;
+      }
+    }
 }
 
 /*================================================*/
@@ -457,14 +526,17 @@ int uart_open(const char *device, int baud)
 	uart_io.c_cc[VMIN] = 0;	/* make chars available immeadiatly in none canonical mode */
 	uart_io.c_cc[VTIME] = 0;
 	
-	if ( tcsetattr(uart_fd, TCSANOW, &uart_io) < 0 )
-		return close(uart_fd), err("uart: tcsetattr error"), 0;
-	
 	
 	if ( cfsetispeed(&uart_io, baud) < 0 )
 		return close(uart_fd), err("uart: cfsetispeed error"), 0;
 	if ( cfsetospeed(&uart_io, baud) < 0 )
 		return close(uart_fd), err("uart: cfsetospeed error"), 0;
+	if ( cfsetspeed(&uart_io, baud) < 0 )
+		return close(uart_fd), err("uart: cfsetspeed error"), 0;
+
+	if ( tcsetattr(uart_fd, TCSANOW, &uart_io) < 0 )
+		return close(uart_fd), err("uart: tcsetattr error"), 0;
+	
 
 	return 1;	
 }
@@ -493,6 +565,63 @@ int uart_send_byte(int c)
 	}
 	return 1;
 }
+
+int uart_send_bytes(int cnt, unsigned char *buf)
+{
+  int i = 0;
+  int j;
+  if ( uart_fd >= 0 )
+  {
+    while( i < cnt )
+    {
+      if ( i + UART_BLOCKSIZE <= cnt )
+      {
+	write(uart_fd, buf+i, UART_BLOCKSIZE);
+	for( j = 0; j < UART_BLOCKSIZE; j++ )
+	  uart_read_byte();
+	i+=UART_BLOCKSIZE;
+      }
+      else
+      {
+	write(uart_fd, buf+i, 1);
+	uart_read_byte();
+	i++;
+      }
+    }
+  }
+  return 1;
+}
+
+int uart_send_cnt_bytes(int cnt, unsigned char data)
+{
+  unsigned char buf[UART_BLOCKSIZE];
+  int i = 0;
+  int j;
+  for( j = 0; j < UART_BLOCKSIZE; j++ )
+    buf[j] = data;
+    
+  if ( uart_fd >= 0 )
+  {
+    while( i < cnt )
+    {
+      if ( i + UART_BLOCKSIZE <= cnt )
+      {
+	write(uart_fd, buf, UART_BLOCKSIZE);
+	for( j = 0; j < UART_BLOCKSIZE; j++ )
+	  uart_read_byte();
+	i+=UART_BLOCKSIZE;
+      }
+      else
+      {
+	write(uart_fd, buf, 1);
+	uart_read_byte();
+	i++;
+      }
+    }
+  }
+  return 1;
+}
+
 
 int uart_send_str(const char *str)
 {
@@ -708,19 +837,22 @@ struct _lpc_struct
 {
   char *name;
   unsigned long part_id;
-  unsigned long flash_size;
-  unsigned long sector_size;
+  unsigned long flash_adr;		/* start address of the internal flash memory */
+  unsigned long flash_size;		/* total size of the flash memory */
+  unsigned long sector_size;		/* size of a sector flash_size/sector_size gives the number of sectors, sector_size must be power of 2 */
+  unsigned long ram_buf_adr;	/* start address of the RAM buffer for writing, check manual for a suitable place */
+  unsigned long ram_buf_size;	/* must be power of 2 and must be smaller than or equal to sector_size */
 };
 typedef struct _lpc_struct lpc_struct;
 
 lpc_struct lpc_list[] = {
-/* name, part_id, flash_size, sector_size */
-{"LPC810M021FN8", 0x00008100, 0x1000,0x0400 },
-{"LPC811M001JDH16", 0x00008110, 0x2000,0x0400 },
-{"LPC812M101JDH16", 0x00008120, 0x4000,0x0400 },
-{"LPC812M101JD20", 0x00008121, 0x4000,0x0400 },
-{"LPC812M101JDH20", 0x00008122, 0x4000,0x0400 },
-{"LPC812M101JTB16", 0x00008122, 0x4000,0x0400 }
+/* name, 				part_id, 		flash_adr, 	flash_size, sec_size, 	ram_adr,		ram_size	 */
+{"LPC810M021FN8", 	0x00008100, 	0x00000000, 	0x1000,	0x0400,	0x10000300,	0x0100 },
+{"LPC811M001JDH16", 	0x00008110, 	0x00000000, 	0x2000,	0x0400,	0x10000300,	0x0100 },
+{"LPC812M101JDH16", 	0x00008120, 	0x00000000, 	0x4000,	0x0400,	0x10000300,	0x0100 },
+{"LPC812M101JD20", 	0x00008121, 	0x00000000, 	0x4000,	0x0400,	0x10000300,	0x0100 },
+{"LPC812M101JDH20", 	0x00008122, 	0x00000000, 	0x4000,	0x0400,	0x10000300,	0x0100 },
+{"LPC812M101JTB16", 	0x00008122, 	0x00000000, 	0x4000,	0x0400,	0x10000300,	0x0100 }
 };
 
 unsigned long lpc_part_id = 0;
@@ -738,7 +870,72 @@ lpc_struct *lpc_find_by_part_id(unsigned long part_id)
 }
 
 /*
+  unlock 
+*/
+int lpc_unlock(void)
+{
+  int result_code;
+
+  if ( lpc_part == NULL )
+    return 0;
+
+  uart_reset_in_buf();
+  uart_send_str("U 23130\r\n");
+  uart_read_more();
+  //uart_show_in_buf();
+  result_code = uart_get_result_code();
+  if ( result_code != 0 )
+    return err("unlock failed (%d)", result_code), 0;
+  return 1;
+
+}
+
+
+/*
   requires, that lpc_part has been set correctly
+*/
+int lpc_prepare_sectors(unsigned long start_sector, unsigned long end_sector)
+{
+  int i;
+  char s[32];
+  unsigned long sector_cnt;
+  int result_code;
+
+  if ( lpc_part == NULL )
+    return 0;
+  
+  msg("flash prepare for sector %lu-%lu (0x%08lx-0x%08lx)", 
+    start_sector, 
+    end_sector,
+    lpc_part->flash_adr+start_sector*lpc_part->sector_size,
+    lpc_part->flash_adr+end_sector*lpc_part->sector_size+lpc_part->sector_size-1);
+  
+  sprintf(s, "P %lu %lu\r\n", start_sector, end_sector);
+  uart_reset_in_buf();
+  uart_send_str(s);
+
+  for( i = 0; i < 4*5; i++)
+  {
+    uart_read_more();
+    
+    result_code = uart_get_result_code();
+    if ( result_code > 0 )
+      return err("flash prepare failed (%d)", result_code), 0;
+    else if ( result_code == 0 )
+      return 1;
+    msg("flash prepare in progress (%d)", i);
+  }
+  return err("flash prepare timeout"), 0;
+  
+  //uart_show_in_buf();
+  
+  return 1;
+  
+}
+
+/*
+  requires, that lpc_part has been set correctly
+  Also prepares sectors
 */
 int lpc_erase_all(void)
 {
@@ -753,6 +950,11 @@ int lpc_erase_all(void)
   sector_cnt = lpc_part->flash_size / lpc_part->sector_size;
   sector_cnt--;
   sprintf(s, "E 0 %lu\r\n", sector_cnt);
+  
+  lpc_prepare_sectors(0, sector_cnt);
+
+  msg("flash erase");
+  
   uart_reset_in_buf();
   uart_send_str(s);
 
@@ -765,23 +967,268 @@ int lpc_erase_all(void)
       return err("flash erase failed (%d)", result_code), 0;
     else if ( result_code == 0 )
       return 1;
+    msg("flash erase in progress (%d)", i);
   }
-  return err("flash timeout"), 0;
-  
-  //uart_show_in_buf();
-  
-  return 1;
+  return err("flash erase timeout"), 0;
   
 }
+
+
+/*
+  sub-proc of the download/flash/verify procedure: download data to ram
+  the global variable lpc_part must be set for this procedure
+  the size of the page is available in lpc_part->ram_buf_size
+  if 'size' is smaller than lpc_part->ram_buf_size, remaining bytes are filled with "0x0ff"
+*/
+int lpc_page_download_to_ram(unsigned long size, unsigned char *buf)
+{
+  unsigned long i;
+  char s[32];
+  int result_code;
+
+  if ( lpc_part == NULL )
+    return 0;
+
+  msg("page download to RAM");
+  
+  sprintf(s, "W %lu %lu\r\n", lpc_part->ram_buf_adr, lpc_part->ram_buf_size);
+  uart_reset_in_buf();
+  uart_send_str(s);
+  uart_read_more();
+  result_code = uart_get_result_code();
+  if ( result_code > 0 )
+    return err("page download failure (%d)", result_code), 0;
+
+  //uart_reset_in_buf();
+  
+  if ( size < lpc_part->ram_buf_size)
+  {
+    uart_send_bytes(size, buf);
+    uart_send_cnt_bytes(lpc_part->ram_buf_size-size, 0x0ff);
+    /*
+    for( i = size; i < lpc_part->ram_buf_size; i++ )
+      uart_send_byte(0x0ff);    
+    */
+  }
+  else
+  {
+    uart_send_bytes(lpc_part->ram_buf_size, buf);
+  }
+  
+  /*
+  for( i = 0; i < lpc_part->ram_buf_size; i++ )
+  {
+    if ( i < size )
+      uart_send_byte(buf[i]);
+    else
+      uart_send_byte(0x0ff);
+  }
+  */
+  uart_read_more();
+  return 1;  
+}
+
+/*
+  compare the page data (size & buf) with the data in the controller at "adr"
+  adr can be lpc_part->ram_buf_adr or the flash rom adr.
+  data is loaded from the controller and compared with the data at "buf".
+  only "size" bytes are compared.
+
+  0: failed or page not equal
+*/
+int lpc_page_compare(unsigned long adr, unsigned long size, unsigned char *buf)
+{
+  unsigned long i;
+  char s[32];
+  int result_code;
+
+  if ( lpc_part == NULL )
+    return 0;
+
+  msg("compare with data at 0x%08x", adr);
+  
+  sprintf(s, "R %lu %lu\r\n", adr, lpc_part->ram_buf_size);
+  uart_reset_in_buf();
+  uart_send_str(s);
+  uart_read_more();
+  
+  if ( uart_in_pos < lpc_part->ram_buf_size )
+    return err("page compare failure (too less data)"), 0;
+
+  if ( memcmp(buf, uart_in_buf+uart_in_pos-lpc_part->ram_buf_size,size) != 0 )
+    return err("page compare failed (not equal)"), 0;
+
+  return 1;
+}
+
+/*
+  flash the data from the controller ram into flash memory
+  the RAM address is defined by lpc_part->ram_buf_adr
+  the size of the RAM block is always lpc_part->ram_buf_size
+
+*/
+int lpc_page_flash(unsigned long dest_adr)
+{
+  int i;
+  char s[48];
+  int result_code;
+
+  if ( lpc_part == NULL )
+    return 0;
+
+  msg("flash RAM page to adr 0x%08x", dest_adr);
+  
+  
+
+
+  sprintf(s, "C %lu %lu %lu\r\n", dest_adr, lpc_part->ram_buf_adr, lpc_part->ram_buf_size);
+  uart_reset_in_buf();
+  uart_send_str(s);
+
+  for( i = 0; i < 4*5; i++)
+  {
+    uart_read_more();
+    
+    result_code = uart_get_result_code();
+    if ( result_code > 0 )
+      return err("page flash failed (%d)", result_code), 0;
+    else if ( result_code == 0 )
+      return 1;
+    msg("page flash in progress (%d)", i);
+  }
+  return err("page flash timeout"), 0;
+  
+  
+}
+
+
+/*
+  write a single page (a part of a sector)
+  page size is defined by lpc_part->ram_buf_size
+  'size' must be smaller or equal to lpc_part->ram_buf_size
+  if 'size' is smaller than lpc_part->ram_buf_size, remaining bytes are filled with "0x0ff"
+
+  precondition: erase flash before executing this procedure 
+*/
+int lpc_page_write_flash_verify(unsigned long size, unsigned char *buf, unsigned long dest_adr)
+{
+  unsigned long sector;
+
+  
+  if ( lpc_part == NULL )
+    return 0;
+  
+  /* calculate the number of the sector, later used for the prepare command */
+  sector = dest_adr / lpc_part->sector_size;
+
+  /* download the page (a fraction of the sector) to RAM */
+  if ( lpc_page_download_to_ram(size, buf) == 0 )
+    return 0;
+
+  /* prepare the sector */
+  if ( lpc_prepare_sectors(sector, sector) == 0 )
+    return 0;
+
+  /* flash the page into the prepared sector */
+  if ( lpc_page_flash(dest_adr) == 0 )
+    return 0;
+  
+  /* check, whether the page has been written correctly */
+  if ( lpc_page_compare(dest_adr, size, buf) == 0 )
+    return 0;
+  
+  return 1;
+}
+
+/*
+  flash an ihex file
+*/
+int lpc_flash_ihex(void)
+{
+  unsigned long page_cnt;
+  unsigned char *buf;
+  
+  if ( lpc_part == NULL )
+    return 0;
+  
+  if ( lpc_erase_all() == 0 )
+    return 0;
+  
+  buf = (unsigned char *)malloc(lpc_part->ram_buf_size);
+  if ( buf == NULL )
+    return err("page alloc failure"), 0;
+  
+  page_cnt = lpc_part->flash_size / lpc_part->ram_buf_size;
+  
+  while( page_cnt > 0 )
+  {
+    page_cnt--;
+    msg("flash page %03d at address 0x%08x", page_cnt, lpc_part->flash_adr + page_cnt * lpc_part->ram_buf_size);
+    if ( fmem_copy(lpc_part->flash_adr + page_cnt * lpc_part->ram_buf_size, lpc_part->ram_buf_size, buf) != 0 )
+    {
+      if ( lpc_page_write_flash_verify(lpc_part->ram_buf_size, buf, lpc_part->flash_adr + page_cnt * lpc_part->ram_buf_size) == 0 )
+      {
+	return free(buf), 0;	
+      }
+    }
+  }
+  
+  return 1;
+}
+
+unsigned long arm_calculate_vector_table_crc(void)
+{
+  int i;
+  unsigned long crc;
+  unsigned long vector;
+  unsigned long adr;
+
+  /* calculate the crc */
+  crc = 0UL;
+  adr = 0UL;
+  for( i = 0; i < 7; i++ )
+  {
+    vector = (unsigned long)fmem_get_byte(adr++);
+    vector |= ((unsigned long)fmem_get_byte(adr++)) << 8;
+    vector |= ((unsigned long)fmem_get_byte(adr++)) << 16;
+    vector |= ((unsigned long)fmem_get_byte(adr++)) << 24;
+    crc += vector;
+  }
+  crc = 0-crc;
+  
+  /* store found crc in vector */
+  vector = (unsigned long)fmem_get_byte(adr++);
+  vector |= ((unsigned long)fmem_get_byte(adr++)) << 8;
+  vector |= ((unsigned long)fmem_get_byte(adr++)) << 16;
+  vector |= ((unsigned long)fmem_get_byte(adr++)) << 24;
+  
+  msg("ARM crc calculated = 0x%08lx, found = 0x%08lx", crc, vector);
+      
+  /* overwrite crc in the ihex file */
+  adr = 7*4;
+  fmem_set_byte(adr++, (crc>>0) & 255);
+  fmem_set_byte(adr++, (crc>>8) & 255);
+  fmem_set_byte(adr++, (crc>>16) & 255);
+  fmem_set_byte(adr++, (crc>>24) & 255);
+
+  
+}
+
 
 /*================================================*/
 /* main */
 
 int main(int argc, char **argv)
 {
-	ihex_read_file("lpc810_led_driver_700mA.hex");
+	ihex_read_file("../lpc810_led_driver/lpc810_led_driver.hex");
+	arm_calculate_vector_table_crc();
 	fmem_show();
-	uart_open("/dev/ttyUSB0", B9600);
+	//uart_open("/dev/ttyUSB0", B9600);
+	//uart_open("/dev/ttyUSB0", B19200);
+	if ( uart_open("/dev/ttyUSB0", B57600) == 0 )
+	//if ( uart_open("/dev/ttyUSB0", B9600) == 0 )
+	  return 1;
+  
 	if ( uart_synchronize(0) == 0 )
 	{
 		for(;;)
@@ -806,10 +1253,28 @@ int main(int argc, char **argv)
 	
 	msg("controller %s with %lu bytes flash memory", lpc_part->name, lpc_part->flash_size);
 	
-	lpc_erase_all();
+	lpc_unlock();
+	
+	// lpc_flash_ihex();
+	
+	//lpc_erase_all();
+	
+	//lpc_page_download_to_ram(6, "ABCabc");
+	//lpc_page_compare(lpc_part->ram_buf_adr, 6, "ABCabc");
+	//uart_show_in_buf();
+	
+	//lpc_erase_all();
+	//lpc_page_write_flash_verify(6, "ABCabc", 0x00000800);
+	
 	
 	//uart_read_from_adr(0, 32);
+	//uart_read_from_adr(0, 32);
+	//uart_show_in_buf();
+
+	uart_read_from_adr(0x00000800, 32);
 	uart_show_in_buf();
+	//uart_read_from_adr(0x10000300, 256);
+	//uart_show_in_buf();
 	
 	return 0;
 }
