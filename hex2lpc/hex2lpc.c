@@ -399,7 +399,7 @@ int ihex_read_file(const char *filename)
 {
 	ihex_fp = fopen(filename, "rb");
 	if ( ihex_fp == NULL )
-		return err("ihex: open error %s", filename), 0;
+		return err("ihex: open error with file '%s'", filename), 0;
 	msg("intel hex file %s", filename);
 	if ( ihex_read_fp() == 0 )
 	{
@@ -1209,20 +1209,140 @@ void arm_calculate_vector_table_crc(void)
   
 }
 
+/*================================================*/
+
+int get_str_arg(char ***argv, int c, char **result)
+{
+  if ( (**argv)[0] == '-' )
+  {
+    if ( (**argv)[1] == c )
+    {
+      if ( (**argv)[2] == '\0' )
+      {
+	(*argv)++;
+	*result = **argv;
+      }
+      else
+      {
+	*result = (**argv)+2;
+      }
+      (*argv)++;
+      return 1;      
+    }
+  }
+  return 0;
+}
+
+
+int get_num_arg(char ***argv, int c, unsigned long *result)
+{
+  if ( (**argv)[0] == '-' )
+  {
+    if ( (**argv)[1] == c )
+    {
+      if ( (**argv)[2] == '\0' )
+      {
+	(*argv)++;
+	*result = strtoul((**argv), NULL, 10);
+      }
+      else
+      {
+	*result = strtoul((**argv)+2, NULL, 10);
+      }
+      (*argv)++;
+      return 1;      
+    }
+  }
+  return 0;
+}
+
+int is_arg(char ***argv, int c)
+{
+  if ( (**argv)[0] == '-' )
+  {
+    if ( (**argv)[1] == c )
+    {
+      (*argv)++;
+      return 1;      
+    }
+  }
+  return 0;
+}
+
+/*================================================*/
+void help(void)
+{
+  printf("-h        Display this help\n");
+  printf("-f <file> Load data from intel hex <file>\n");
+  printf("-p <port> Use UART at <port> (default: '/dev/ttyUSB0')\n");
+  printf("-s <n>    Set UART transfer speed, 0=9600 (default), 1=19200, 2=57600\n");
+}
 
 /*================================================*/
 /* main */
 
 int main(int argc, char **argv)
 {
-	ihex_read_file("../lpc810_led_driver/lpc810_led_driver.hex");
-	arm_calculate_vector_table_crc();
-	//fmem_show();
-	//uart_open("/dev/ttyUSB0", B9600);
-	//uart_open("/dev/ttyUSB0", B19200);
-	if ( uart_open("/dev/ttyUSB0", B57600) == 0 )
-	//if ( uart_open("/dev/ttyUSB0", B9600) == 0 )
-	  return 1;
+  unsigned long speed = 0;
+  int baud = B9600;
+  
+  char *file = "";
+  char *port = "/dev/ttyUSB0";
+  
+  argv++;
+  /*
+  if ( *argv == NULL )
+  {
+    help();
+    exit(1);
+  }
+  */
+  for(;;)
+  {
+    if ( *argv == NULL )
+      break;
+    if ( is_arg(&argv, 'h') != 0 )
+    {
+      help();
+      exit(1);
+    }
+    else if ( get_num_arg(&argv, 's', &speed) != 0 )
+    {
+    }
+    else if ( get_str_arg(&argv, 'f', &file) != 0 )
+    {      
+    }
+    else if ( get_str_arg(&argv, 'p', &port) != 0 )
+    {      
+    }
+    else
+    {
+      help();
+      exit(1);
+    }
+  }
+  switch(speed)
+  {
+    default:
+    case 0: baud = B9600; break;
+    case 1: baud = B19200; break;
+    case 2: baud = B57600; break;
+  }
+  
+  if ( ihex_read_file(file) == 0 )
+  {
+    exit(1);
+  }
+  
+  arm_calculate_vector_table_crc();
+  //fmem_show();
+  //uart_open("/dev/ttyUSB0", B9600);
+  //uart_open("/dev/ttyUSB0", B19200);
+  if ( uart_open(port, baud) == 0 )
+  //if ( uart_open("/dev/ttyUSB0", B9600) == 0 )
+  {
+    exit(1);
+  }
   
 	if ( uart_synchronize(0) == 0 )
 	{
