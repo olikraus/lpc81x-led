@@ -18,6 +18,11 @@
 
 #include <time.h>
 
+/* this defines the number of bytes, which should be sent before any further read happens */
+/* it seems that there is a echo with the LPC devices, so that all data sent to the LPC */
+/* is always sent back. This means, while writing, the same number of bytes are sent back */
+/* so in general, we could write one byte and read one byte, but this is slow */
+/* setting UART_BLOCKSIZE to 4 will write 4 bytes and then read 4 bytes, which is much faster */
 #define UART_BLOCKSIZE 4
 
 /* forward declarations */
@@ -118,6 +123,7 @@ int fmem_init(void)
 	return 1;
 }
 
+/* (internal function, only called by fmem_add_data) */
 int fmem_expand(void)
 {
 	void *ptr;
@@ -129,6 +135,8 @@ int fmem_expand(void)
 	return 1;
 }
 
+/* add a new data block to the flash memory manager */
+/* (internal function, only called by fmem_store_data) */
 int fmem_add_data(unsigned long adr, unsigned long cnt, unsigned char *data)
 {
 	mb_struct *mb = mb_open();
@@ -152,6 +160,8 @@ int fmem_add_data(unsigned long adr, unsigned long cnt, unsigned char *data)
 	return 0;
 }
 
+/* same as fmem_add_data, but it tries to expand the last data block of possible */
+/* idea is to reduce the number of independent data blocks */
 int fmem_store_data(unsigned long adr, unsigned long cnt, unsigned char *data)
 {
 	if ( fmem_mb_list_cnt > 0 )
@@ -395,6 +405,15 @@ int ihex_read_fp(void)
 	return 1;
 }
 
+/*
+  read intel hex file into the flash memory manager.
+  after this, use the following functions:
+
+    int fmem_copy(unsigned long adr, unsigned long size, unsigned char *buf)
+    unsigned char fmem_get_byte(unsigned long adr)
+    void fmem_set_byte(unsigned long adr, unsigned char val)
+
+*/
 int ihex_read_file(const char *filename)
 {
 	ihex_fp = fopen(filename, "rb");
@@ -520,7 +539,7 @@ int uart_open(const char *device, int baud)
 	  case B115200:
 	  case B230400:
 	    wait_time_in_clk_ticks = CLOCKS_PER_SEC/8;
-	    break;	    
+	    break;
 	}
 	
   
@@ -852,7 +871,7 @@ struct _lpc_struct
   unsigned long flash_size;		/* total size of the flash memory */
   unsigned long sector_size;		/* size of a sector flash_size/sector_size gives the number of sectors, sector_size must be power of 2 */
   unsigned long ram_buf_adr;	/* start address of the RAM buffer for writing, check manual for a suitable place */
-  unsigned long ram_buf_size;	/* must be power of 2 and must be smaller than or equal to sector_size */
+  unsigned long ram_buf_size;	/* must be power of 2 and must be smaller than or equal to sector_size and bigger than one flash page */
 };
 typedef struct _lpc_struct lpc_struct;
 
@@ -1072,9 +1091,6 @@ int lpc_page_flash(unsigned long dest_adr)
 
   msg("flash RAM page to adr 0x%08x", dest_adr);
   
-  
-
-
   sprintf(s, "C %lu %lu %lu\r\n", dest_adr, lpc_part->ram_buf_adr, lpc_part->ram_buf_size);
   uart_reset_in_buf();
   uart_send_str(s);
@@ -1157,13 +1173,17 @@ int lpc_flash_ihex(void)
   while( page_cnt > 0 )
   {
     page_cnt--;
-    msg("flash page %03d at address 0x%08x", page_cnt, lpc_part->flash_adr + page_cnt * lpc_part->ram_buf_size);
     if ( fmem_copy(lpc_part->flash_adr + page_cnt * lpc_part->ram_buf_size, lpc_part->ram_buf_size, buf) != 0 )
     {
+      msg("flash page %03d at address 0x%08x", page_cnt, lpc_part->flash_adr + page_cnt * lpc_part->ram_buf_size);
       if ( lpc_page_write_flash_verify(lpc_part->ram_buf_size, buf, lpc_part->flash_adr + page_cnt * lpc_part->ram_buf_size) == 0 )
       {
 	return free(buf), 0;	
       }
+    }
+    else
+    {
+      msg("flash page %03d at address 0x%08x is skipped (no data in ihex file)", page_cnt, lpc_part->flash_adr + page_cnt * lpc_part->ram_buf_size);
     }
   }
   
@@ -1208,6 +1228,32 @@ void arm_calculate_vector_table_crc(void)
 
   
 }
+
+int lpc_load_and_flash_ihex(const char *ihex_name)
+{
+  if ( ihex_name == NULL )
+  {
+    return err("no ihex file"), 0;
+  }
+
+  if ( ihex_name[0] == '\0' )
+  {
+    return err("no ihex file"), 0;
+  }
+  
+  
+  if ( ihex_read_file(ihex_name) == 0 )
+  {
+    return err("ihex file read error"), 0;
+  }
+  
+  arm_calculate_vector_table_crc();
+  
+  lpc_unlock();
+	
+  return lpc_flash_ihex();
+}
+
 
 /*================================================*/
 
@@ -1321,6 +1367,8 @@ int main(int argc, char **argv)
       exit(1);
     }
   }
+  
+  
   switch(speed)
   {
     default:
@@ -1329,12 +1377,6 @@ int main(int argc, char **argv)
     case 2: baud = B57600; break;
   }
   
-  if ( ihex_read_file(file) == 0 )
-  {
-    exit(1);
-  }
-  
-  arm_calculate_vector_table_crc();
   //fmem_show();
   //uart_open("/dev/ttyUSB0", B9600);
   //uart_open("/dev/ttyUSB0", B19200);
@@ -1368,25 +1410,8 @@ int main(int argc, char **argv)
 	
 	msg("controller %s with %lu bytes flash memory", lpc_part->name, lpc_part->flash_size);
 	
-	lpc_unlock();
+	lpc_load_and_flash_ihex(file);	/* unlock, erase and flash procedure */
 	
-	lpc_flash_ihex(); /* erase and flash procedure */
-	
-	//lpc_page_download_to_ram(6, "ABCabc");
-	//lpc_page_compare(lpc_part->ram_buf_adr, 6, "ABCabc");
-	//uart_show_in_buf();
-	
-	//lpc_erase_all();
-	//lpc_page_write_flash_verify(6, "ABCabc", 0x00000800);
-	
-	//uart_read_from_adr(0, 32);
-	//uart_read_from_adr(0, 32);
-	//uart_show_in_buf();
-
-	//uart_read_from_adr(0x00000800, 32);
-	//uart_show_in_buf();
-	//uart_read_from_adr(0x10000300, 256);
-	//uart_show_in_buf();
 	
 	return 0;
 }
