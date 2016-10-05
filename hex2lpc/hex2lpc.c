@@ -430,6 +430,32 @@ int ihex_read_file(const char *filename)
 }
 
 /*================================================*/
+const char *lpc_error_string[] =
+{
+  "CMD_SUCCESS",
+  "INVALID_COMMAND",
+  "SRC_ADDR_ERROR",
+  "DST_ADDR_ERROR",
+  "SRC_ADDR_NOT_MAPPED",
+  "DST_ADDR_NOT_MAPPED",  /* 5 */
+  "COUNT_ERROR",
+  "iNVALID_SECTOR",
+  "SECTOR_NOT_BLANK",
+  "SECTOR_NOT_PREPARED_FOR_WRITE_OPERATION",
+  "COMPARE_ERROR", /* 10 */
+  "BUSY",
+  "PARAM_ERROR",
+  "ADDR_ERROR",
+  "ADDR_NOT_MAPPED",
+  "CMD_LOCKED", /* 15 */
+  "INVALID_CODE",
+  "INVALID_BAUD_RATE",
+  "INVALID_STOP_BIT",
+  "CODE_READ_PROTECTION_ENABLED",
+  "internal hex2lpc error" /* 20 */
+};
+
+/*================================================*/
 /* uart connection  */
 
 int uart_fd = 0;
@@ -439,18 +465,24 @@ struct termios uart_io;
 unsigned char uart_in_buf[UART_IN_BUF_LEN];
 unsigned long uart_in_pos = 0;
 unsigned long wait_time_in_clk_ticks = CLOCKS_PER_SEC/4;
+unsigned long uart_in_first_0x0a_pos = 0x0ffffffff;
 
 int uart_is_synchronized = 0;
 
 void uart_add_in_buf(unsigned char c)
 {
-	if ( uart_in_pos < UART_IN_BUF_LEN )
-		uart_in_buf[uart_in_pos++] = c;
+  if ( uart_in_pos < UART_IN_BUF_LEN )
+  {
+    if ( uart_in_first_0x0a_pos == 0x0ffffffff && c == 0x0a )
+      uart_in_first_0x0a_pos = uart_in_pos;
+    uart_in_buf[uart_in_pos++] = c;
+  }
 }
 
 void uart_reset_in_buf(void)
 {
-	uart_in_pos = 0;
+  uart_in_first_0x0a_pos = 0x0ffffffff;
+  uart_in_pos = 0;
 }
 
 void uart_show_in_buf(void)
@@ -479,8 +511,15 @@ void uart_show_in_buf(void)
   }
 }
 
+int uart_get_result_code_after_first_0x0a(void)
+{
+  if ( uart_in_first_0x0a_pos == 0x0ffffffff )
+    return 20;
+  return atoi((const char *)uart_in_buf+uart_in_first_0x0a_pos+1);
+}
+
 /* get the LPC error/result code from the end of the buffer */
-int uart_get_result_code(void)
+int uart_get_result_code_from_buf_end(void)
 {
   int code = 0;
   unsigned long i = uart_in_pos;
@@ -933,7 +972,7 @@ int lpc_unlock(void)
   uart_send_str("U 23130\r\n");
   uart_read_more();
   //uart_show_in_buf();
-  result_code = uart_get_result_code();
+  result_code = uart_get_result_code_from_buf_end();
   if ( result_code != 0 )
     return err("unlock failed (%d)", result_code), 0;
   return 1;
@@ -967,7 +1006,7 @@ int lpc_prepare_sectors(unsigned long start_sector, unsigned long end_sector)
   {
     uart_read_more();
     
-    result_code = uart_get_result_code();
+    result_code = uart_get_result_code_from_buf_end();
     if ( result_code > 0 )
       return err("flash prepare failed (%d)", result_code), 0;
     else if ( result_code == 0 )
@@ -1011,7 +1050,7 @@ int lpc_erase_all(void)
   {
     uart_read_more();
     
-    result_code = uart_get_result_code();
+    result_code = uart_get_result_code_from_buf_end();
     if ( result_code > 0 )
       return err("flash erase failed (%d)", result_code), 0;
     else if ( result_code == 0 )
@@ -1043,7 +1082,7 @@ int lpc_page_download_to_ram(unsigned long size, unsigned char *buf)
   uart_reset_in_buf();
   uart_send_str(s);
   uart_read_more();
-  result_code = uart_get_result_code();
+  result_code = uart_get_result_code_from_buf_end();
   if ( result_code > 0 )
     return err("page download failure (%d)", result_code), 0;
 
@@ -1061,6 +1100,30 @@ int lpc_page_download_to_ram(unsigned long size, unsigned char *buf)
   
   uart_read_more();
   return 1;  
+}
+
+/*
+  compare the content at adr with the content at the ram buffer
+  This will always compare the complete ram buffer. This is ok, because
+  during download of the data, RAM buffer is filled with 0x0ff.
+  Also flash procedure will always flash the complete buffer.
+
+  Problem: this seems to succeed always...???
+*/
+int lpc_page_quick_compare(unsigned long adr)
+{
+  char s[48];
+  int result_code;
+  msg("compare %lu bytes", lpc_part->ram_buf_size);
+  sprintf(s, "M %lu %lu %lu\r\n", lpc_part->ram_buf_adr, adr, lpc_part->ram_buf_size);
+  uart_reset_in_buf();
+  uart_send_str(s);
+  uart_read_more();
+  //uart_show_in_buf();
+  result_code = uart_get_result_code_after_first_0x0a();
+  if ( result_code > 0 )
+    return err("compare failure (%d)", result_code), 0;
+  return 1;
 }
 
 /*
@@ -1119,7 +1182,7 @@ int lpc_page_flash(unsigned long dest_adr)
   {
     uart_read_more();
     
-    result_code = uart_get_result_code();
+    result_code = uart_get_result_code_from_buf_end();
     if ( result_code > 0 )
       return err("page flash failed (%d)", result_code), 0;
     else if ( result_code == 0 )
@@ -1163,7 +1226,11 @@ int lpc_page_write_flash_verify(unsigned long size, unsigned char *buf, unsigned
   if ( lpc_page_flash(dest_adr) == 0 )
     return 0;
   
-  /* check, whether the page has been written correctly */
+  /* check the content of the controller RAM with the newly flashed area */
+  if ( lpc_page_quick_compare(dest_adr) == 0 )
+    return 0;
+  
+  /* check, whether the page has been written correctly, by reading the data back to the PC */
   if ( lpc_page_compare(dest_adr, size, buf) == 0 )
     return 0;
   
