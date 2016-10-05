@@ -1398,42 +1398,45 @@ int main(int argc, char **argv)
   }
   
   //fmem_show();
-  //uart_open("/dev/ttyUSB0", B9600);
-  //uart_open("/dev/ttyUSB0", B19200);
   if ( uart_open(port, baud) == 0 )
-  //if ( uart_open("/dev/ttyUSB0", B9600) == 0 )
   {
-    exit(1);
+	  for(;;)
+	  {
+		  msg("please connect controller to USB port, retry...");
+		  sleep(2);
+		  if ( uart_open(port, baud) != 0 )
+			  break;
+	  }
   }
   
-	if ( uart_synchronize(0) == 0 )
-	{
-		for(;;)
-		{
-			msg("please put controller into UART ISP mode, retry...");
-			if ( uart_synchronize(1) != 0 )
-				break;
-		}
-	}
-	
-	/* read part number */
-	lpc_part_id = uart_read_part_numer();
-	msg("received part id 0x%08x", lpc_part_id);
-	
-	/*  check if the part number is known */
-	lpc_part = lpc_find_by_part_id(lpc_part_id);
-	if ( lpc_part == NULL )
-	{
-	  err("unknown controller");
-	  return 0;
-	}
-	
-	msg("controller %s with %lu bytes flash memory", lpc_part->name, lpc_part->flash_size);
-	
-	lpc_load_and_flash_ihex(file);	/* unlock, erase and flash procedure */
-	
-	
-	return 0;
+  if ( uart_synchronize(0) == 0 )
+  {
+	  for(;;)
+	  {
+		  msg("please put controller into UART ISP mode, retry...");
+		  if ( uart_synchronize(1) != 0 )
+			  break;
+	  }
+  }
+  
+  /* read part number */
+  lpc_part_id = uart_read_part_numer();
+  msg("received part id 0x%08x", lpc_part_id);
+  
+  /*  check if the part number is known */
+  lpc_part = lpc_find_by_part_id(lpc_part_id);
+  if ( lpc_part == NULL )
+  {
+    err("unknown controller");
+    return 0;
+  }
+  
+  msg("controller %s with %lu bytes flash memory", lpc_part->name, lpc_part->flash_size);
+  
+  lpc_load_and_flash_ihex(file);	/* unlock, erase and flash procedure */
+  
+  
+  return 0;
 }
 
 
