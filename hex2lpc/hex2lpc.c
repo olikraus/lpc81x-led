@@ -1086,7 +1086,7 @@ int lpc_page_download_to_ram(unsigned long size, unsigned char *buf)
   if ( result_code > 0 )
     return err("page download failure (%d)", result_code), 0;
 
-  //uart_reset_in_buf();
+  uart_reset_in_buf();
   
   if ( size < lpc_part->ram_buf_size)
   {
@@ -1099,6 +1099,12 @@ int lpc_page_download_to_ram(unsigned long size, unsigned char *buf)
   }
   
   uart_read_more();
+  //uart_show_in_buf();
+
+  if ( memcmp(buf, uart_in_buf,size) != 0 )
+    return err("page data download error"), 0;
+  
+  
   return 1;  
 }
 
@@ -1114,7 +1120,7 @@ int lpc_page_quick_compare(unsigned long adr)
 {
   char s[48];
   int result_code;
-  msg("compare %lu bytes", lpc_part->ram_buf_size);
+  msg("compare %lu bytes at 0x%08x", lpc_part->ram_buf_size, adr);
   sprintf(s, "M %lu %lu %lu\r\n", lpc_part->ram_buf_adr, adr, lpc_part->ram_buf_size);
   uart_reset_in_buf();
   uart_send_str(s);
@@ -1231,9 +1237,10 @@ int lpc_page_write_flash_verify(unsigned long size, unsigned char *buf, unsigned
     return 0;
   
   /* check, whether the page has been written correctly, by reading the data back to the PC */
+  /* this is not required any more */
   if ( lpc_page_compare(dest_adr, size, buf) == 0 )
     return 0;
-  
+
   return 1;
 }
 
