@@ -574,14 +574,25 @@ int uart_open(const char *device, int baud)
 int uart_read_byte(void)
 {
 	ssize_t cnt;
+	unsigned char buf[2];
 	if ( uart_fd < 0 )
 		return -1;
-	unsigned char buf[2];
 	cnt = read(uart_fd, buf, 1);
 	if ( cnt == 0 )
 		return -1;
 	uart_add_in_buf(buf[0]);
 	return buf[0];
+}
+
+void uart_read_bytes(void)
+{
+	ssize_t i, cnt;
+	unsigned char buf[UART_BLOCKSIZE+2];
+	if ( uart_fd < 0 )
+		return;
+	cnt = read(uart_fd, buf, UART_BLOCKSIZE);
+	for( i = 0; i < cnt; i++)
+	  uart_add_in_buf(buf[i]);
 }
 
 int uart_send_byte(int c)
@@ -596,7 +607,7 @@ int uart_send_byte(int c)
 	return 1;
 }
 
-int uart_send_bytes(int cnt, unsigned char *buf)
+int uart_send_bytes(int cnt, const unsigned char *buf)
 {
   int i = 0;
   int j;
@@ -607,8 +618,11 @@ int uart_send_bytes(int cnt, unsigned char *buf)
       if ( i + UART_BLOCKSIZE <= cnt )
       {
 	write(uart_fd, buf+i, UART_BLOCKSIZE);
+	uart_read_bytes();
+	/*
 	for( j = 0; j < UART_BLOCKSIZE; j++ )
 	  uart_read_byte();
+	*/
 	i+=UART_BLOCKSIZE;
       }
       else
@@ -655,11 +669,15 @@ int uart_send_cnt_bytes(int cnt, unsigned char data)
 
 int uart_send_str(const char *str)
 {
+  return uart_send_bytes(strlen(str), str);
+  
+/*  
 	int i, len = strlen(str);
 	for( i = 0; i < len; i++ )
 		if ( uart_send_byte(str[i]) == 0 )
 			return 0;
 	return 1;
+  */
 }
 
 #ifdef USE_TIME
@@ -692,6 +710,7 @@ void uart_read_more(void)
 {
 	clock_t start;
 	clock_t curr;
+	clock_t wait = wait_time_in_clk_ticks;
 	int c;
 	unsigned long received_chars;
 
@@ -707,6 +726,7 @@ void uart_read_more(void)
 		{
 			// printf("[%lu %d %c]\n", received_chars, c, c < ' ' ? ' ' : c);
 			start = clock();			/* reset clock */
+			wait = wait_time_in_clk_ticks/4;	/* wait lesser once another byte was read */
 			received_chars++;
 		}
 	}
