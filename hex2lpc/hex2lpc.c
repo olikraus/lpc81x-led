@@ -934,6 +934,11 @@ struct _lpc_struct
 };
 typedef struct _lpc_struct lpc_struct;
 
+/*
+  for LPC81x, the stack is located at 0x1000 0270 and grows downwards.
+  LPC81x: sector size=1024 bytes, page size=64 bytes
+*/
+
 lpc_struct lpc_list[] = {
 /* name, 				part_id, 		flash_adr, 	flash_size, sec_size, 	ram_adr,		ram_size	 */
 {"LPC810M021FN8", 	0x00008100, 	0x00000000, 	0x1000,	0x0400,	0x10000300,	0x0100 },
@@ -977,7 +982,7 @@ int lpc_unlock(void)
     return err("unlock failed (%d)", result_code), 0;
   return 1;
 
-}
+} 	   	
 
 
 /*
