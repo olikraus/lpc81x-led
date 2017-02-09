@@ -1,6 +1,12 @@
 /*
 
-	hex2lpc.c
+  hex2lpc.c
+  
+  Upload Intel Hex File to LPC8xx devices
+  
+  Features:
+    - Calculates the checksum at 0x001c in the vector table
+    - Part ID detection (if no hex file is specified on the commandline)
 
 */
 
@@ -941,12 +947,21 @@ typedef struct _lpc_struct lpc_struct;
 
 lpc_struct lpc_list[] = {
 /* name, 				part_id, 		flash_adr, 	flash_size, sec_size, 	ram_adr,		ram_size	 */
+  
+//{"LPC824M201JHI33", 	0x0000 8241,	0x00000000,	0x8000,	0x0400,	0x10000300,	0x0100 },
+//{"LPC822M201JHI33", 	0x0000 8221,	0x00000000,	0x8000,	0x0400,	0x10000300,	0x0100 },
+//{"LPC824M201JDH20", 	0x0000 8242,	0x00000000,	0x8000,	0x0400,	0x10000300,	0x0100 },
+//{"LPC822M201JDH20", 	0x0000 8222,	0x00000000,	0x4000,	0x0400,	0x10000300,	0x0100 },
+  
 {"LPC810M021FN8", 	0x00008100, 	0x00000000, 	0x1000,	0x0400,	0x10000300,	0x0100 },
 {"LPC811M001JDH16", 	0x00008110, 	0x00000000, 	0x2000,	0x0400,	0x10000300,	0x0100 },
 {"LPC812M101JDH16", 	0x00008120, 	0x00000000, 	0x4000,	0x0400,	0x10000300,	0x0100 },
 {"LPC812M101JD20", 	0x00008121, 	0x00000000, 	0x4000,	0x0400,	0x10000300,	0x0100 },
 {"LPC812M101JDH20", 	0x00008122, 	0x00000000, 	0x4000,	0x0400,	0x10000300,	0x0100 },
 {"LPC812M101JTB16", 	0x00008122, 	0x00000000, 	0x4000,	0x0400,	0x10000300,	0x0100 }
+
+
+
 };
 
 unsigned long lpc_part_id = 0;
@@ -1310,7 +1325,7 @@ void arm_calculate_vector_table_crc(void)
   }
   crc = 0-crc;
   
-  /* store found crc in vector */
+  /* put found crc in vector */
   vector = (unsigned long)fmem_get_byte(adr++);
   vector |= ((unsigned long)fmem_get_byte(adr++)) << 8;
   vector |= ((unsigned long)fmem_get_byte(adr++)) << 16;
@@ -1355,6 +1370,7 @@ int lpc_load_and_flash_ihex(const char *ihex_name)
 
 
 /*================================================*/
+/* commandline parser and main procedure */
 
 int get_str_arg(char ***argv, int c, char **result)
 {
