@@ -943,10 +943,13 @@ typedef struct _lpc_struct lpc_struct;
 /*
   for LPC81x, the stack is located at 0x1000 0270 and grows downwards.
   LPC81x: sector size=1024 bytes, page size=64 bytes
+
 */
 
 lpc_struct lpc_list[] = {
 /* name, 				part_id, 		flash_adr, 	flash_size, sec_size, 	ram_adr,		ram_size	 */
+/* condition: (a) sec_size >= ram_size (b) ram_adr+ram_size <= highest sram address+1 */
+  
   
 //{"LPC824M201JHI33", 	0x0000 8241,	0x00000000,	0x8000,	0x0400,	0x10000300,	0x0100 },
 //{"LPC822M201JHI33", 	0x0000 8221,	0x00000000,	0x8000,	0x0400,	0x10000300,	0x0100 },
@@ -960,6 +963,15 @@ lpc_struct lpc_list[] = {
 {"LPC812M101JDH20", 	0x00008122, 	0x00000000, 	0x4000,	0x0400,	0x10000300,	0x0100 },
 {"LPC812M101JTB16", 	0x00008122, 	0x00000000, 	0x4000,	0x0400,	0x10000300,	0x0100 }
 
+// LP804: The stack of UART ISP commands is located at address 0x1000 03A8. The maximum stack usage is 640 bytes (0x280) and grows downwards.
+// RAM end is at 0x10001000, so probably ram_size could be 0x0200 or 0x0400
+
+
+{"LPC804M101JBD64", 0x00008040, 	0x00000000, 	0x8000,	0x0400,	0x10000400,	0x0100 },
+{"LPC804M101JDH20", 0x00008041, 	0x00000000, 	0x8000,	0x0400,	0x10000400,	0x0100 },
+{"LPC804M101JDH24", 0x00008042, 	0x00000000, 	0x8000,	0x0400,	0x10000400,	0x0100 },
+{"LPC804M111JDH24", 0x00008043, 	0x00000000, 	0x8000,	0x0400,	0x10000400,	0x0100 },
+{"LPC804M101JHI33", 0x00008044, 	0x00000000, 	0x8000,	0x0400,	0x10000400,	0x0100 },
 
 
 };
